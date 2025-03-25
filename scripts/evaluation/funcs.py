@@ -175,6 +175,46 @@ def batch_ddim_sampling(model, cond, noise_shape, n_samples=1, ddim_steps=50, dd
     batch_variants = torch.stack(batch_variants, dim=1)
     return batch_variants
 
+def batch_ddim_inversion(model, cond, shape, latents, ddim_steps=50, ddim_eta=1.0, cfg_scale=1.0, temporal_cfg_scale=None, **kwargs):
+    ddim_sampler = DDIMFreeTrajSampler(model)
+    uncond_type = model.uncond_type
+
+    ## construct unconditional guidance
+    if cfg_scale != 1.0:
+        if uncond_type == "empty_seq":
+            prompts = shape[0] * [""]
+            #prompts = N * T * [""]  ## if is_imgbatch=True
+            uc_emb = model.get_learned_conditioning(prompts)
+        elif uncond_type == "zero_embed":
+            c_emb = cond["c_crossattn"][0] if isinstance(cond, dict) else cond
+            uc_emb = torch.zeros_like(c_emb)
+        
+        if isinstance(cond, dict):
+            uc = {key:cond[key] for key in cond.keys()}
+            uc.update({'c_crossattn': [uc_emb]})
+        else:
+            uc = uc_emb
+    else:
+        uc = None
+
+    samples, _ = ddim_sampler.inverse(S=ddim_steps,
+                                    conditioning=cond,
+                                    batch_size=shape[0],
+                                    shape=shape[1:],
+                                    x0=latents,
+                                    verbose=False,
+                                    unconditional_guidance_scale=cfg_scale,
+                                    unconditional_conditioning=uc,
+                                    eta=ddim_eta,
+                                    temporal_length=shape[2],
+                                    conditional_guidance_scale_temporal=temporal_cfg_scale,
+                                    **kwargs
+                                    )
+            
+
+    # batch, c, t, h, w
+    return samples
+
 
 def get_filelist(data_dir, ext='*'):
     file_list = glob.glob(os.path.join(data_dir, '*.%s'%ext))

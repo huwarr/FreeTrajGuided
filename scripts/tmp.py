@@ -17,3 +17,8 @@ else:
 
 video = load_video_batch([file_path], 1, video_size=(height, width), video_frames=-1)
 print(video.shape)
+
+# image space -> latent space
+latents = model.encode_first_stage_2DAE
+# cond = {"c_crossattn": [text_emb], "fps": fps}
+# inverse

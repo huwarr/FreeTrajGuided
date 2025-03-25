@@ -36,8 +36,10 @@ class DDIMSampler(object):
             self.register_buffer('scale_arr', to_torch(self.model.scale_arr))
             ddim_scale_arr = self.scale_arr.cpu()[self.ddim_timesteps]
             self.register_buffer('ddim_scale_arr', ddim_scale_arr)
-            ddim_scale_arr = np.asarray([self.scale_arr.cpu()[0]] + self.scale_arr.cpu()[self.ddim_timesteps[:-1]].tolist())
-            self.register_buffer('ddim_scale_arr_prev', ddim_scale_arr)
+            ddim_scale_arr_prev = np.asarray([self.scale_arr.cpu()[0]] + self.scale_arr.cpu()[self.ddim_timesteps[:-1]].tolist())
+            self.register_buffer('ddim_scale_arr_prev', ddim_scale_arr_prev)
+            ddim_scale_arr_next = np.asarray(self.scale_arr.cpu()[self.ddim_timesteps[1:] + [self.scale_arr.cpu()[-1]]].tolist())
+            self.register_buffer('ddim_scale_arr_next', ddim_scale_arr_next)
 
         # calculations for diffusion q(x_t | x_{t-1}) and others
         self.register_buffer('sqrt_alphas_cumprod', to_torch(np.sqrt(alphas_cumprod.cpu())))
@@ -47,12 +49,13 @@ class DDIMSampler(object):
         self.register_buffer('sqrt_recipm1_alphas_cumprod', to_torch(np.sqrt(1. / alphas_cumprod.cpu() - 1)))
 
         # ddim sampling parameters
-        ddim_sigmas, ddim_alphas, ddim_alphas_prev = make_ddim_sampling_parameters(alphacums=alphas_cumprod.cpu(),
+        ddim_sigmas, ddim_alphas, ddim_alphas_prev, ddim_alphas_next = make_ddim_sampling_parameters(alphacums=alphas_cumprod.cpu(),
                                                                                    ddim_timesteps=self.ddim_timesteps,
                                                                                    eta=ddim_eta,verbose=verbose)
         self.register_buffer('ddim_sigmas', ddim_sigmas)
         self.register_buffer('ddim_alphas', ddim_alphas)
         self.register_buffer('ddim_alphas_prev', ddim_alphas_prev)
+        self.register_buffer('ddim_alphas_next', ddim_alphas_next)
         self.register_buffer('ddim_sqrt_one_minus_alphas', np.sqrt(1. - ddim_alphas))
         sigmas_for_original_sampling_steps = ddim_eta * torch.sqrt(
             (1 - self.alphas_cumprod_prev) / (1 - self.alphas_cumprod) * (
@@ -338,3 +341,188 @@ class DDIMSampler(object):
                                           unconditional_conditioning=unconditional_conditioning)
         return x_dec
 
+    @torch.no_grad()
+    def inverse(self,
+               S,
+               batch_size,
+               shape,
+               x0,
+               conditioning=None,
+               callback=None,
+               img_callback=None,
+               eta=0.,
+               temperature=1.,
+               noise_dropout=0.,
+               score_corrector=None,
+               corrector_kwargs=None,
+               verbose=True,
+               schedule_verbose=False,
+               log_every_t=100,
+               unconditional_guidance_scale=1.,
+               unconditional_conditioning=None,
+               **kwargs
+               ):
+        
+        # check condition bs
+        if conditioning is not None:
+            if isinstance(conditioning, dict):
+                try:
+                    cbs = conditioning[list(conditioning.keys())[0]].shape[0]
+                except:
+                    cbs = conditioning[list(conditioning.keys())[0]][0].shape[0]
+
+                if cbs != batch_size:
+                    print(f"Warning: Got {cbs} conditionings but batch-size is {batch_size}")
+            else:
+                if conditioning.shape[0] != batch_size:
+                    print(f"Warning: Got {conditioning.shape[0]} conditionings but batch-size is {batch_size}")
+
+        self.make_schedule(ddim_num_steps=S, ddim_eta=eta, verbose=schedule_verbose)
+        
+        # make shape
+        if len(shape) == 3:
+            C, H, W = shape
+            size = (batch_size, C, H, W)
+        elif len(shape) == 4:
+            C, T, H, W = shape
+            size = (batch_size, C, T, H, W)
+        
+        samples, intermediates = self.ddim_inversion(conditioning, size,
+                                                    callback=callback,
+                                                    img_callback=img_callback, x0=x0,
+                                                    noise_dropout=noise_dropout,
+                                                    temperature=temperature,
+                                                    score_corrector=score_corrector,
+                                                    corrector_kwargs=corrector_kwargs,
+                                                    log_every_t=log_every_t,
+                                                    unconditional_guidance_scale=unconditional_guidance_scale,
+                                                    unconditional_conditioning=unconditional_conditioning,
+                                                    verbose=verbose,
+                                                    **kwargs)
+        return samples, intermediates
+
+    @torch.no_grad()
+    def ddim_inversion(self, cond, shape,
+                      callback=None, x0=None, img_callback=None, 
+                      log_every_t=100, temperature=1., noise_dropout=0., score_corrector=None, 
+                      corrector_kwargs=None, unconditional_guidance_scale=1., unconditional_conditioning=None,
+                      verbose=True, **kwargs):
+        device = self.model.betas.device        
+        print('ddim device', device)
+        b = shape[0]
+
+        img = x0
+        time_range = self.ddim_timesteps
+        intermediates = {'x_inter': [img], 'pred_x0': [img]}
+
+        total_steps = time_range.shape[0]
+        if verbose:
+            iterator = tqdm(time_range, desc='DDIM Inversion', total=total_steps)
+        else:
+            iterator = time_range
+
+
+        for i, step in enumerate(iterator):
+            index = total_steps - i - 1
+            ts = torch.full((b,), step, device=device, dtype=torch.long)
+            
+            outs = self.p_inverse_ddim(img, cond, ts, index=index, temperature=temperature,
+                                      noise_dropout=noise_dropout, score_corrector=score_corrector,
+                                      corrector_kwargs=corrector_kwargs,
+                                      unconditional_guidance_scale=unconditional_guidance_scale,
+                                      unconditional_conditioning=unconditional_conditioning,
+                                      step=i, **kwargs)
+            
+            img, pred_x0 = outs
+            if callback: callback(i)
+            if img_callback: img_callback(pred_x0, i)
+
+            if index % log_every_t == 0 or index == total_steps - 1:
+                intermediates['x_inter'].append(img)
+                intermediates['pred_x0'].append(pred_x0)
+
+        return img, intermediates
+    
+
+    @torch.no_grad()
+    def p_inverse_ddim(self, x, c, t, index, repeat_noise=False, temperature=1., 
+                      noise_dropout=0., score_corrector=None, corrector_kwargs=None,
+                      unconditional_guidance_scale=1., unconditional_conditioning=None,
+                      uc_type=None, conditional_guidance_scale_temporal=None, step=0, ddim_edit=0, **kwargs):
+        b, *_, device = *x.shape, x.device
+        if x.dim() == 5:
+            is_video = True
+        else:
+            is_video = False
+        
+        if unconditional_conditioning is None or unconditional_guidance_scale == 1.:
+            e_t = self.model.apply_model(x, t, c, **kwargs) # unet denoiser
+        else:
+            # with unconditional condition
+            if step < ddim_edit:
+                e_t = self.model.apply_model(x, t, c, use_freetraj=True, **kwargs)
+                e_t_uncond = self.model.apply_model(x, t, unconditional_conditioning, use_freetraj=True, **kwargs)
+            elif isinstance(c, torch.Tensor):
+                e_t = self.model.apply_model(x, t, c, **kwargs)
+                e_t_uncond = self.model.apply_model(x, t, unconditional_conditioning, **kwargs)
+            elif isinstance(c, dict):
+                e_t = self.model.apply_model(x, t, c, **kwargs)
+                e_t_uncond = self.model.apply_model(x, t, unconditional_conditioning, **kwargs)
+            else:
+                raise NotImplementedError
+            # text cfg
+            if uc_type is None:
+                e_t = e_t_uncond + unconditional_guidance_scale * (e_t - e_t_uncond)
+            else:
+                if uc_type == 'cfg_original':
+                    e_t = e_t + unconditional_guidance_scale * (e_t - e_t_uncond)
+                elif uc_type == 'cfg_ours':
+                    e_t = e_t + unconditional_guidance_scale * (e_t_uncond - e_t)
+                else:
+                    raise NotImplementedError
+            # temporal guidance
+            if conditional_guidance_scale_temporal is not None:
+                e_t_temporal = self.model.apply_model(x, t, c, **kwargs)
+                e_t_image = self.model.apply_model(x, t, c, no_temporal_attn=True, **kwargs)
+                e_t = e_t + conditional_guidance_scale_temporal * (e_t_temporal - e_t_image)
+
+        if score_corrector is not None:
+            assert self.model.parameterization == "eps"
+            e_t = score_corrector.modify_score(self.model, e_t, x, t, c, **corrector_kwargs)
+
+
+        alphas = self.ddim_alphas
+        alphas_next = self.ddim_alphas_next
+        sqrt_one_minus_alphas = self.ddim_sqrt_one_minus_alphas
+        sigmas = self.ddim_sigmas
+        
+        if is_video:
+            size = (b, 1, 1, 1, 1)
+        else:
+            size = (b, 1, 1, 1)
+        
+        a_t = torch.full(size, alphas[index], device=device)
+        a_next = torch.full(size, alphas_next[index], device=device)
+        sigma_t = torch.full(size, sigmas[index], device=device)
+        sqrt_one_minus_at = torch.full(size, sqrt_one_minus_alphas[index],device=device)
+
+        # current prediction for x_0
+        pred_x0 = (x - sqrt_one_minus_at * e_t) / a_t.sqrt()
+        # direction pointing to x_t-1
+        dir_xprev = (1. - a_next - sigma_t**2).sqrt() * e_t
+
+        noise = sigma_t * noise_like(x.shape, device, repeat_noise) * temperature
+        if noise_dropout > 0.:
+            noise = torch.nn.functional.dropout(noise, p=noise_dropout)
+        
+        if self.use_scale:
+            scale_arr = self.ddim_scale_arr
+            scale_t = torch.full(size, scale_arr[index], device=device)
+            scale_arr_next = self.ddim_scale_arr_next
+            scale_t_next = torch.full(size, scale_arr_next[index], device=device)
+            pred_x0 /= scale_t 
+            x_next = a_next.sqrt() * scale_t_next * pred_x0 + dir_xprev + noise
+        else:
+            x_next = a_next.sqrt() * pred_x0 + dir_xprev + noise
+
+        return x_next, pred_x0
