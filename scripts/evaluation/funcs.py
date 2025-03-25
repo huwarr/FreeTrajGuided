@@ -6,7 +6,7 @@ import cv2
 
 import torch
 import torchvision
-sys.path.insert(1, os.path.join(sys.path[0], '..', '..'))
+sys.path.insert(1, os.path.join(sys.path[0], '..'))
 from lvdm.models.samplers.ddim import DDIMSampler
 from lvdm.models.samplers.ddim_freetraj import DDIMSampler as DDIMFreeTrajSampler
 
@@ -289,7 +289,7 @@ def load_video_batch(filepath_list, frame_stride, video_size=(256,256), video_fr
         sample_fps = int(fps/frame_stride)
         fps_list.append(sample_fps)
     
-    return torch.stack(batch_tensor, dim=0)
+    return torch.stack(batch_tensor, dim=0) # B x C x F x H x W
 
 from PIL import Image
 def load_image_batch(filepath_list, image_size=(256,256)):
