@@ -175,7 +175,8 @@ def batch_ddim_sampling(model, cond, noise_shape, n_samples=1, ddim_steps=50, dd
     batch_variants = torch.stack(batch_variants, dim=1)
     return batch_variants
 
-def batch_ddim_inversion(model, cond, shape, latents, ddim_steps=50, ddim_eta=1.0, cfg_scale=1.0, temporal_cfg_scale=None, **kwargs):
+def batch_ddim_inversion(model, cond, latents, ddim_steps=50, ddim_eta=1.0, cfg_scale=1.0, temporal_cfg_scale=None, **kwargs):
+    shape = latents.shape
     ddim_sampler = DDIMFreeTrajSampler(model)
     uncond_type = model.uncond_type
 
