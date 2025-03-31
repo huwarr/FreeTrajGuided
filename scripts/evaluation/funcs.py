@@ -6,7 +6,7 @@ import cv2
 
 import torch
 import torchvision
-sys.path.insert(1, os.path.join(sys.path[0], '..'))
+sys.path.insert(1, os.path.join(sys.path[0], '..', '..'))
 from lvdm.models.samplers.ddim import DDIMSampler
 from lvdm.models.samplers.ddim_freetraj import DDIMSampler as DDIMFreeTrajSampler
 
