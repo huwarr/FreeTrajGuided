@@ -165,7 +165,7 @@ class DDIMSampler(object):
 
         init_x0 = False
         clean_cond = kwargs.pop("clean_cond", False)
-        for i, step in enumerate(iterator):
+        for i, step in tqdm(enumerate(iterator), total=total_steps):
             index = total_steps - i - 1
             ts = torch.full((b,), step, device=device, dtype=torch.long)
             if start_timesteps is not None:
@@ -422,7 +422,7 @@ class DDIMSampler(object):
             iterator = time_range
 
 
-        for i, step in enumerate(iterator):
+        for i, step in tqdm(enumerate(iterator), total=total_steps):
             index = total_steps - i - 1
             ts = torch.full((b,), step, device=device, dtype=torch.long)
             
