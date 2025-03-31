@@ -22,3 +22,9 @@ print(video.shape)
 latents = model.encode_first_stage_2DAE
 # cond = {"c_crossattn": [text_emb], "fps": fps}
 # inverse
+
+
+# debug inversion
+
+# 1. timestep vs layer + avg layers | for isolated time frame (several examples)
+# 2. time frames -- best from 1 + bounding boxes -- bboxes + time frames
