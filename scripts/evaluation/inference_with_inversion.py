@@ -11,8 +11,8 @@ from functools import partial
 import torch
 from pytorch_lightning import seed_everything
 
-from evaluation.funcs import load_model_checkpoint, load_video_batch, load_prompts, load_idx, load_traj, load_image_batch, get_filelist, save_videos, save_videos_with_bbox
-from evaluation.funcs import batch_ddim_inversion, batch_ddim_sampling_freetraj
+from funcs import load_model_checkpoint, load_video_batch, load_prompts, load_idx, load_traj, load_image_batch, get_filelist, save_videos, save_videos_with_bbox
+from funcs import batch_ddim_inversion, batch_ddim_sampling_freetraj
 from utils.utils import instantiate_from_config
 
 
