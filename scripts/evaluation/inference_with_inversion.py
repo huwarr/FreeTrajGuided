@@ -67,13 +67,13 @@ def run_inference(args, gpu_num, gpu_no, **kwargs):
     if init_height > init_width:
         height = args.max_size
         width = int((height / init_height) * init_width)
-        print(f"Reszing: {frames} x {height} x {width}")
+        print(f"Resizing: {frames} x {height} x {width}")
         width = ((width - 1) // 64 + 1) * 64
         print(f"Aligning: {frames} x {height} x {width}")
     else:
         width = args.max_size
         height = int((width / init_width) * init_height)
-        print(f"Reszing: {frames} x {height} x {width}")
+        print(f"Resizing: {frames} x {height} x {width}")
         height = ((height - 1) // 64 + 1) * 64
         print(f"Aligning: {frames} x {height} x {width}")
 
