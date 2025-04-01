@@ -38,7 +38,7 @@ class DDIMSampler(object):
             self.register_buffer('ddim_scale_arr', ddim_scale_arr)
             ddim_scale_arr_prev = np.asarray([self.scale_arr.cpu()[0]] + self.scale_arr.cpu()[self.ddim_timesteps[:-1]].tolist())
             self.register_buffer('ddim_scale_arr_prev', ddim_scale_arr_prev)
-            ddim_scale_arr_next = np.asarray(self.scale_arr.cpu()[self.ddim_timesteps[1:] + [self.scale_arr.cpu()[-1]]].tolist())
+            ddim_scale_arr_next = np.asarray(self.scale_arr.cpu()[self.ddim_timesteps[1:]].tolist() + [self.scale_arr.cpu()[-1]])
             self.register_buffer('ddim_scale_arr_next', ddim_scale_arr_next)
 
         # calculations for diffusion q(x_t | x_{t-1}) and others
@@ -460,8 +460,8 @@ class DDIMSampler(object):
         else:
             # with unconditional condition
             if step < ddim_edit:
-                e_t = self.model.apply_model(x, t, c, use_freetraj=True, **kwargs)
-                e_t_uncond = self.model.apply_model(x, t, unconditional_conditioning, use_freetraj=True, **kwargs)
+                e_t = self.model.apply_model(x, t, c, **kwargs)
+                e_t_uncond = self.model.apply_model(x, t, unconditional_conditioning, **kwargs)
             elif isinstance(c, torch.Tensor):
                 e_t = self.model.apply_model(x, t, c, **kwargs)
                 e_t_uncond = self.model.apply_model(x, t, unconditional_conditioning, **kwargs)

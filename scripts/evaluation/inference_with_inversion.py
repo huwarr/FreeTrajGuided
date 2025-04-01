@@ -15,6 +15,8 @@ from funcs import load_model_checkpoint, load_video_batch, load_prompts, load_id
 from funcs import batch_ddim_inversion, batch_ddim_sampling_freetraj
 from utils.utils import instantiate_from_config
 
+from torchvision.io import write_video
+
 
 def get_parser():
     parser = argparse.ArgumentParser()
@@ -52,24 +54,40 @@ def run_inference(args, gpu_num, gpu_no, **kwargs):
 
     # load reference video
     video_tmp = cv2.VideoCapture(args.ref_path)
-    init_height = video_tmp.get(cv2.CAP_PROP_FRAME_HEIGHT)
-    init_width = video_tmp.get(cv2.CAP_PROP_FRAME_WIDTH)
-    assert (args.max_size % 16 == 0), "Error: size [h,w] should be multiples of 16"
+    init_frames = int(video_tmp.get(cv2.CAP_PROP_FRAME_COUNT))
+    init_height = int(video_tmp.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    init_width = int(video_tmp.get(cv2.CAP_PROP_FRAME_WIDTH))
+    print(f"Initial shape: {init_frames} x {init_height} x {init_width}")
+    
+    # fix frames number to avoid OOM
+    frames = min(model.temporal_length, init_frames)
+    print(f"Frame cut: {frames} x {init_height} x {init_width}")
+    
+    assert (args.max_size % 64 == 0), "Error: size should be multiple of 64"
     if init_height > init_width:
         height = args.max_size
         width = int((height / init_height) * init_width)
-        width = ((width - 1) // 16 + 1) * 16
+        print(f"Reszing: {frames} x {height} x {width}")
+        width = ((width - 1) // 64 + 1) * 64
+        print(f"Aligning: {frames} x {height} x {width}")
     else:
         width = args.max_size
         height = int((width / init_width) * init_height)
-        height = ((height - 1) // 16 + 1) * 16
+        print(f"Reszing: {frames} x {height} x {width}")
+        height = ((height - 1) // 64 + 1) * 64
+        print(f"Aligning: {frames} x {height} x {width}")
 
-    video = load_video_batch([args.ref_path], 1, video_size=(height, width), video_frames=-1)
+    video = load_video_batch([args.ref_path], 1, video_size=(height, width), video_frames=frames).to(model.device)
     # B x C x F x H x W
-    frames = video.shape[2]
-
+    # [-1, 1]
+    write_video("test.mp4", ((video[0].permute(1, 2, 3, 0).cpu() + 1) / 2 * 255).to(dtype=torch.uint8), fps=args.savefps)
+    #save_videos(video.unsqueeze(1), os.path.join(args.savedir, 'ref'), filenames, fps=args.savefps)
+    
     # video -> latents
     latents = model.encode_first_stage_2DAE(video)
+    vs = video.shape
+    del video
+    torch.cuda.empty_cache()
 
     assert os.path.exists(args.prompt_ref_file), "Error: reference video prompt file NOT Found!"
     prompt_ref_list = load_prompts(args.prompt_ref_file)
@@ -83,7 +101,7 @@ def run_inference(args, gpu_num, gpu_no, **kwargs):
         model, cond, latents, args.ddim_steps, args.ddim_eta, args.unconditional_guidance_scale, **kwargs
     )
 
-    print(video.shape)
+    print(vs)
     print(latents.shape)
     print(inversed.shape)
 

@@ -120,16 +120,17 @@ class CrossAttention(nn.Module):
             k = self.to_k(context)
             v = self.to_v(context)
 
-        hw = q.shape[0]
-        w_base = 64
-        h_base = 40
-        w_len = int((hw / w_base / h_base) ** 0.5 * w_base)
-        h_len = int(hw / w_len)
-        BOX_SIZE_H = input_traj[0][2] - input_traj[0][1]
-        BOX_SIZE_W = input_traj[0][4] - input_traj[0][3]
-        PATHS = plan_path(input_traj)
-        sub_h = int(BOX_SIZE_H * h_len) 
-        sub_w = int(BOX_SIZE_W * w_len)
+        if use_freetraj:
+            hw = q.shape[0]
+            w_base = 64
+            h_base = 40
+            w_len = int((hw / w_base / h_base) ** 0.5 * w_base)
+            h_len = int(hw / w_len)
+            BOX_SIZE_H = input_traj[0][2] - input_traj[0][1]
+            BOX_SIZE_W = input_traj[0][4] - input_traj[0][3]
+            PATHS = plan_path(input_traj)
+            sub_h = int(BOX_SIZE_H * h_len) 
+            sub_w = int(BOX_SIZE_W * w_len)
 
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> (b h) n d', h=h), (q, k, v))
         sim = torch.einsum('b i d, b j d -> b i j', q, k) * self.scale
@@ -235,16 +236,17 @@ class CrossAttention(nn.Module):
             k = self.to_k(context)
             v = self.to_v(context)
 
-        hw = q.shape[1]
-        w_base = 64
-        h_base = 40
-        w_len = int((hw / h_base / w_base) ** 0.5 * w_base)
-        h_len = int(hw / w_len)
-        BOX_SIZE_H = input_traj[0][2] - input_traj[0][1]
-        BOX_SIZE_W = input_traj[0][4] - input_traj[0][3]
-        PATHS = plan_path(input_traj)
-        sub_h = int(BOX_SIZE_H * h_len) 
-        sub_w = int(BOX_SIZE_W * w_len)
+        if use_freetraj:
+            hw = q.shape[1]
+            w_base = 64
+            h_base = 40
+            w_len = int((hw / h_base / w_base) ** 0.5 * w_base)
+            h_len = int(hw / w_len)
+            BOX_SIZE_H = input_traj[0][2] - input_traj[0][1]
+            BOX_SIZE_W = input_traj[0][4] - input_traj[0][3]
+            PATHS = plan_path(input_traj)
+            sub_h = int(BOX_SIZE_H * h_len) 
+            sub_w = int(BOX_SIZE_W * w_len)
 
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> (b h) n d', h=h), (q, k, v))
         sim = torch.einsum('b i d, b j d -> b i j', q, k) * self.scale

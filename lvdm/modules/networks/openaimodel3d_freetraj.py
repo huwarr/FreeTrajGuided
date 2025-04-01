@@ -548,6 +548,7 @@ class UNetModel(nn.Module):
 
         ## always in shape (b t) c h w, except for temporal layer
         x = rearrange(x, 'b c t h w -> (b t) c h w')
+        #print(x.shape)
 
         h = x.type(self.dtype)
         adapter_idx = 0
@@ -565,6 +566,9 @@ class UNetModel(nn.Module):
             assert len(features_adapter)==adapter_idx, 'Wrong features_adapter'
 
         h = self.middle_block(h, emb, context=context, batch_size=b, **kwargs)
+        #print(h.shape)
+        #for _ in hs:
+            #print(_.shape)
         for module in self.output_blocks:
             h = torch.cat([h, hs.pop()], dim=1)
             h = module(h, emb, context=context, batch_size=b, **kwargs)
