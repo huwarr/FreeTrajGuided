@@ -415,6 +415,8 @@ class DDIMSampler(object):
         img = x0
         time_range = self.ddim_timesteps
         intermediates = {'x_inter': [img], 'pred_x0': [img]}
+        if return_cross_attn:
+            intermediates['cmaps'] = []
 
         total_steps = time_range.shape[0]
         if verbose:
@@ -442,10 +444,10 @@ class DDIMSampler(object):
             if img_callback: img_callback(pred_x0, i)
 
             if index % log_every_t == 0 or index == total_steps - 1:
-                intermediates['x_inter'].append(img.cpu())
+                #intermediates['x_inter'].append(img.cpu())
                 #intermediates['pred_x0'].append(pred_x0)
                 if return_cross_attn:
-                    intermediates['cmaps'] = cmaps
+                    intermediates['cmaps'].append(cmaps)
 
         return img, intermediates
     
@@ -542,5 +544,5 @@ class DDIMSampler(object):
             x_next = a_next.sqrt() * pred_x0 + dir_xprev + noise
 
         if return_cross_attn:
-            x_next, pred_x0, cmaps 
+            return x_next, pred_x0, cmaps 
         return x_next, pred_x0

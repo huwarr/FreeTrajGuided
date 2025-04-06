@@ -104,7 +104,7 @@ class CrossAttention(nn.Module):
             if XFORMERS_IS_AVAILBLE and temporal_length is None:
                 self.forward = self.space_forward
 
-    def forward(self, x, context=None, mask=None, use_freetraj=False, idx_list=[], input_traj=[]):
+    def forward(self, x, context=None, mask=None, use_freetraj=False, idx_list=[], input_traj=[], return_cross_attn=False):
         h = self.heads
 
         q = self.to_q(x)
@@ -213,7 +213,7 @@ class CrossAttention(nn.Module):
 
         return self.to_out(out)
     
-    def space_forward(self, x, context=None, mask=None, use_freetraj=False, idx_list=[], input_traj=[]):
+    def space_forward(self, x, context=None, mask=None, use_freetraj=False, idx_list=[], input_traj=[], return_cross_attn=False):
         
         if context is None:
             SA_flag = True
@@ -333,6 +333,8 @@ class CrossAttention(nn.Module):
 
         # attention, what we cannot get enough of
         sim = sim.softmax(dim=-1)
+        if return_cross_attn:
+            cmap = sim
         if use_freetraj:
             sim += weight_add
 
@@ -354,6 +356,8 @@ class CrossAttention(nn.Module):
             out = out + self.image_cross_attention_scale * out_ip
         del q
 
+        if return_cross_attn:
+            return self.to_out(out), cmap.detach().cpu()
         return self.to_out(out)
 
 
@@ -374,7 +378,7 @@ class BasicTransformerBlock(nn.Module):
         self.norm3 = nn.LayerNorm(dim)
         self.checkpoint = checkpoint
 
-    def forward(self, x, context=None, mask=None, use_freetraj=False, idx_list=[], input_traj=[], **kwargs):
+    def forward(self, x, context=None, mask=None, use_freetraj=False, idx_list=[], input_traj=[],  return_cross_attn=False, **kwargs):
         ## implementation tricks: because checkpointing doesn't support non-tensor (e.g. None or scalar) arguments
         input_tuple = (x,)      ## should not be (x), otherwise *input_tuple will decouple x into multiple arguments
         if context is not None:
@@ -384,24 +388,19 @@ class BasicTransformerBlock(nn.Module):
             return checkpoint(forward_mask, (x,), self.parameters(), self.checkpoint)
         if context is not None and mask is not None:
             input_tuple = (x, context, mask)
-        input_tuple = (x, context, mask, use_freetraj, idx_list, input_traj)
+        input_tuple = (x, context, mask, use_freetraj, idx_list, input_traj, return_cross_attn)
         return checkpoint(self._forward, input_tuple, self.parameters(), self.checkpoint)
 
     def _forward(self, x, context=None, mask=None, use_freetraj=False, idx_list=[], input_traj=[], return_cross_attn=False):
-        if not return_cross_attn:
-            x = self.attn1(self.norm1(x), context=context if self.disable_self_attn else None, mask=mask, use_freetraj=use_freetraj, idx_list=idx_list, input_traj=input_traj) + x
-            x = self.attn2(self.norm2(x), context=context, mask=mask, use_freetraj=use_freetraj, idx_list=idx_list, input_traj=input_traj) + x
-            x = self.ff(self.norm3(x)) + x
-            return x
-        else:
-            cmap1 = self.attn1(self.norm1(x), context=context if self.disable_self_attn else None, mask=mask, use_freetraj=use_freetraj, idx_list=idx_list, input_traj=input_traj)
-            x = cmap1 + x
-            if not self.disable_self_attn:
-                cmap1 = None
-            cmap2 = self.attn2(self.norm2(x), context=context, mask=mask, use_freetraj=use_freetraj, idx_list=idx_list, input_traj=input_traj)
-            x = cmap2 + x
-            x = self.ff(self.norm3(x)) + x
-            return x, (cmap1, cmap2)
+        x = self.attn1(self.norm1(x), context=context if self.disable_self_attn else None, mask=mask, use_freetraj=use_freetraj, idx_list=idx_list, input_traj=input_traj, return_cross_attn=False) + x
+        out = self.attn2(self.norm2(x), context=context, mask=mask, use_freetraj=use_freetraj, idx_list=idx_list, input_traj=input_traj, return_cross_attn=return_cross_attn)
+        if return_cross_attn:
+            out, cmap = out
+        x = out + x
+        x = self.ff(self.norm3(x)) + x
+        if return_cross_attn:
+            return x, cmap
+        return x
 
 
 class SpatialTransformer(nn.Module):
@@ -457,7 +456,7 @@ class SpatialTransformer(nn.Module):
             out = block(x, context=context, return_cross_attn=return_cross_attn, **kwargs)
             if return_cross_attn:
                 x, cmaps = out
-                cmaps_l.append(cmaps.detach().cpu())
+                cmaps_l.append(cmaps)
             else:
                 x = out
         if self.use_linear:

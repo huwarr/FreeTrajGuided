@@ -35,6 +35,7 @@ class TimestepEmbedSequential(nn.Sequential, TimestepBlock):
 
     def forward(self, x, emb, context=None, batch_size=None, use_freetraj=False, return_cross_attn=False, **kwargs):
         cmaps = []
+        #print(return_cross_attn)
         for layer in self:
             if isinstance(layer, TimestepBlock):
                 x = layer(x, emb, batch_size)
@@ -560,6 +561,7 @@ class UNetModel(nn.Module):
         adapter_idx = 0
         hs = []
         cmaps = []
+        #print(return_cross_attn)
         for id, module in enumerate(self.input_blocks):
             h = module(h, emb, context=context, batch_size=b, return_cross_attn=return_cross_attn, **kwargs)
             if return_cross_attn and isinstance(h, tuple):

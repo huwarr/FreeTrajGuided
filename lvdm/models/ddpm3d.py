@@ -519,7 +519,7 @@ class LatentDiffusion(DDPM):
             key = 'c_concat' if self.model.conditioning_key == 'concat' else 'c_crossattn'
             cond = {key: cond}
 
-        x_recon = self.model(x_noisy, t, **cond, **kwargs)
+        x_recon = self.model(x_noisy, t, **cond, return_cross_attn=return_cross_attn, **kwargs)
 
         if return_cross_attn:
             return x_recon
