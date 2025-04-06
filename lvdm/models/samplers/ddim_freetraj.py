@@ -426,7 +426,7 @@ class DDIMSampler(object):
             index = total_steps - i - 1
             ts = torch.full((b,), step, device=device, dtype=torch.long)
             
-            outs = self.p_inverse_ddim(img, cond, ts, index=index, temperature=temperature,
+            outs = self.p_inverse_ddim(img.cuda(), cond, ts, index=index, temperature=temperature,
                                       noise_dropout=noise_dropout, score_corrector=score_corrector,
                                       corrector_kwargs=corrector_kwargs,
                                       unconditional_guidance_scale=unconditional_guidance_scale,
@@ -438,8 +438,8 @@ class DDIMSampler(object):
             if img_callback: img_callback(pred_x0, i)
 
             if index % log_every_t == 0 or index == total_steps - 1:
-                intermediates['x_inter'].append(img)
-                intermediates['pred_x0'].append(pred_x0)
+                intermediates['x_inter'].append(img.cpu())
+                #intermediates['pred_x0'].append(pred_x0)
 
         return img, intermediates
     

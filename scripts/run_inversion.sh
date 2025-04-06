@@ -25,4 +25,4 @@ python3 scripts/evaluation/inference_with_inversion.py \
 --prompt_gen_file $prompt_gen_file \
 --idx_file $idx_file \
 --ddim_edit 6 \
---fps 24
+--fps 16

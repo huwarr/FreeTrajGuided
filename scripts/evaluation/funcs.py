@@ -6,7 +6,8 @@ import cv2
 
 import torch
 import torchvision
-sys.path.insert(1, os.path.join(sys.path[0], '..', '..'))
+sys.path.insert(1, os.path.join("/notebooks/scripts/evaluation", '..', '..'))
+#sys.path.insert(1, os.path.join(sys.path[0], '..', '..'))
 from lvdm.models.samplers.ddim import DDIMSampler
 from lvdm.models.samplers.ddim_freetraj import DDIMSampler as DDIMFreeTrajSampler
 
@@ -198,7 +199,7 @@ def batch_ddim_inversion(model, cond, latents, ddim_steps=50, ddim_eta=1.0, cfg_
     else:
         uc = None
 
-    samples, _ = ddim_sampler.inverse(S=ddim_steps,
+    samples, inters = ddim_sampler.inverse(S=ddim_steps,
                                     conditioning=cond,
                                     batch_size=shape[0],
                                     shape=shape[1:],
@@ -214,7 +215,7 @@ def batch_ddim_inversion(model, cond, latents, ddim_steps=50, ddim_eta=1.0, cfg_
             
 
     # batch, c, t, h, w
-    return samples
+    return samples, inters
 
 
 def get_filelist(data_dir, ext='*'):
