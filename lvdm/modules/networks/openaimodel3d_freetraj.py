@@ -33,18 +33,24 @@ class TimestepEmbedSequential(nn.Sequential, TimestepBlock):
     support it as an extra input.
     """
 
-    def forward(self, x, emb, context=None, batch_size=None, use_freetraj=False, **kwargs):
+    def forward(self, x, emb, context=None, batch_size=None, use_freetraj=False, return_cross_attn=False, **kwargs):
+        cmaps = []
         for layer in self:
             if isinstance(layer, TimestepBlock):
                 x = layer(x, emb, batch_size)
             elif isinstance(layer, SpatialTransformer):
-                x = layer(x, context, use_freetraj=use_freetraj, **kwargs)
+                x = layer(x, context, use_freetraj=use_freetraj, return_cross_attn=return_cross_attn, **kwargs)
+                if return_cross_attn and isinstance(x, tuple):
+                    x, cmaps_curr = x
+                    cmaps.append(cmaps_curr)
             elif isinstance(layer, TemporalTransformer):
                 x = rearrange(x, '(b f) c h w -> b c f h w', b=batch_size)
                 x = layer(x, context, use_freetraj=use_freetraj, **kwargs)
                 x = rearrange(x, 'b c f h w -> (b f) c h w')
             else:
                 x = layer(x,)
+        if return_cross_attn:
+            return x, cmaps
         return x
 
 
@@ -555,12 +561,10 @@ class UNetModel(nn.Module):
         hs = []
         cmaps = []
         for id, module in enumerate(self.input_blocks):
-            print(module.__class__.__name__)
-            if module.__class__.__name__ == 'SpatialTransformer' and return_cross_attn:
-                h, cmaps_curr = module(h, emb, context=context, batch_size=b, return_cross_attn=return_cross_attn, **kwargs)
-                cmaps.append(cmaps_curr)
-            else:
-                h = module(h, emb, context=context, batch_size=b, **kwargs)
+            h = module(h, emb, context=context, batch_size=b, return_cross_attn=return_cross_attn, **kwargs)
+            if return_cross_attn and isinstance(h, tuple):
+                h, cmaps_cur = h
+                cmaps.append(cmaps_cur)
             if id ==0 and self.addition_attention:
                 h = self.init_attn(h, emb, context=context, batch_size=b, **kwargs)
             ## plug-in adapter features
@@ -571,24 +575,17 @@ class UNetModel(nn.Module):
         if features_adapter is not None:
             assert len(features_adapter)==adapter_idx, 'Wrong features_adapter'
 
-        #h = self.middle_block(h, emb, context=context, batch_size=b, **kwargs)
-        for module in self.middle_block:
-            if module.__class__.__name__ == 'SpatialTransformer' and return_cross_attn:
-                h, cmaps_curr = module(h, emb, context=context, batch_size=b, return_cross_attn=return_cross_attn, **kwargs)
-                cmaps.append(cmaps_curr)
-            else:
-                h = module(h, emb, context=context, batch_size=b, **kwargs)
+        h = self.middle_block(h, emb, context=context, batch_size=b, return_cross_attn=False, **kwargs)
 
         #print(h.shape)
         #for _ in hs:
             #print(_.shape)
         for module in self.output_blocks:
             h = torch.cat([h, hs.pop()], dim=1)
-            if module.__class__.__name__ == 'SpatialTransformer' and return_cross_attn:
-                h, cmaps_curr = module(h, emb, context=context, batch_size=b, return_cross_attn=return_cross_attn, **kwargs)
-                cmaps.append(cmaps_curr)
-            else:
-                h = module(h, emb, context=context, batch_size=b, **kwargs)
+            h = module(h, emb, context=context, batch_size=b, return_cross_attn=return_cross_attn, **kwargs)
+            if return_cross_attn and isinstance(h, tuple):
+                h, cmaps_cur = h
+                cmaps.append(cmaps_cur)
         h = h.type(x.dtype)
         y = self.out(h)
         
