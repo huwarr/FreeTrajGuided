@@ -509,7 +509,7 @@ class LatentDiffusion(DDPM):
     def decode_first_stage(self, z, **kwargs):
         return self.decode_core(z, **kwargs)
 
-    def apply_model(self, x_noisy, t, cond, **kwargs):
+    def apply_model(self, x_noisy, t, cond, return_cross_attn=False, **kwargs):
         if isinstance(cond, dict):
             # hybrid case, cond is exptected to be a dict
             pass
@@ -521,6 +521,9 @@ class LatentDiffusion(DDPM):
 
         x_recon = self.model(x_noisy, t, **cond, **kwargs)
 
+        if return_cross_attn:
+            return x_recon
+        
         if isinstance(x_recon, tuple):
             return x_recon[0]
         else:

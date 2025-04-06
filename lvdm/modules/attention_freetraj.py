@@ -387,11 +387,21 @@ class BasicTransformerBlock(nn.Module):
         input_tuple = (x, context, mask, use_freetraj, idx_list, input_traj)
         return checkpoint(self._forward, input_tuple, self.parameters(), self.checkpoint)
 
-    def _forward(self, x, context=None, mask=None, use_freetraj=False, idx_list=[], input_traj=[]):
-        x = self.attn1(self.norm1(x), context=context if self.disable_self_attn else None, mask=mask, use_freetraj=use_freetraj, idx_list=idx_list, input_traj=input_traj) + x
-        x = self.attn2(self.norm2(x), context=context, mask=mask, use_freetraj=use_freetraj, idx_list=idx_list, input_traj=input_traj) + x
-        x = self.ff(self.norm3(x)) + x
-        return x
+    def _forward(self, x, context=None, mask=None, use_freetraj=False, idx_list=[], input_traj=[], return_cross_attn=False):
+        if not return_cross_attn:
+            x = self.attn1(self.norm1(x), context=context if self.disable_self_attn else None, mask=mask, use_freetraj=use_freetraj, idx_list=idx_list, input_traj=input_traj) + x
+            x = self.attn2(self.norm2(x), context=context, mask=mask, use_freetraj=use_freetraj, idx_list=idx_list, input_traj=input_traj) + x
+            x = self.ff(self.norm3(x)) + x
+            return x
+        else:
+            cmap1 = self.attn1(self.norm1(x), context=context if self.disable_self_attn else None, mask=mask, use_freetraj=use_freetraj, idx_list=idx_list, input_traj=input_traj)
+            x = cmap1 + x
+            if not self.disable_self_attn:
+                cmap1 = None
+            cmap2 = self.attn2(self.norm2(x), context=context, mask=mask, use_freetraj=use_freetraj, idx_list=idx_list, input_traj=input_traj)
+            x = cmap2 + x
+            x = self.ff(self.norm3(x)) + x
+            return x, (cmap1, cmap2)
 
 
 class SpatialTransformer(nn.Module):
@@ -433,7 +443,7 @@ class SpatialTransformer(nn.Module):
         self.use_linear = use_linear
 
 
-    def forward(self, x, context=None, **kwargs):
+    def forward(self, x, context=None, return_cross_attn=False, **kwargs):
         b, c, h, w = x.shape
         x_in = x
         x = self.norm(x)
@@ -442,14 +452,23 @@ class SpatialTransformer(nn.Module):
         x = rearrange(x, 'b c h w -> b (h w) c').contiguous()
         if self.use_linear:
             x = self.proj_in(x)
+        cmaps_l = []
         for i, block in enumerate(self.transformer_blocks):
-            x = block(x, context=context, **kwargs)
+            out = block(x, context=context, return_cross_attn=return_cross_attn, **kwargs)
+            if return_cross_attn:
+                x, cmaps = out
+                cmaps_l.append(cmaps.detach().cpu())
+            else:
+                x = out
         if self.use_linear:
             x = self.proj_out(x)
         x = rearrange(x, 'b (h w) c -> b c h w', h=h, w=w).contiguous()
         if not self.use_linear:
             x = self.proj_out(x)
-        return x + x_in
+        if return_cross_attn:
+            return x + x_in, cmaps_l
+        else:
+            return x + x_in
     
     
 class TemporalTransformer(nn.Module):
@@ -523,7 +542,7 @@ class TemporalTransformer(nn.Module):
         if self.only_self_att:
             ## note: if no context is given, cross-attention defaults to self-attention
             for i, block in enumerate(self.transformer_blocks):
-                x = block(x, mask=mask, **kwargs)
+                x = block(x, mask=mask, return_cross_attn=False, **kwargs)
             x = rearrange(x, '(b hw) t c -> b hw t c', b=b).contiguous()
         else:
             x = rearrange(x, '(b hw) t c -> b hw t c', b=b).contiguous()
@@ -535,7 +554,7 @@ class TemporalTransformer(nn.Module):
                         context[j],
                         't l con -> (t r) l con', r=(h * w) // t, t=t).contiguous()
                     ## note: causal mask will not applied in cross-attention case
-                    x[j] = block(x[j], context=context_j, **kwargs)
+                    x[j] = block(x[j], context=context_j, return_cross_attn=False, **kwargs)
         
         if self.use_linear:
             x = self.proj_out(x)

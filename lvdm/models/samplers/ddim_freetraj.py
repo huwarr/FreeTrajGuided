@@ -360,6 +360,7 @@ class DDIMSampler(object):
                log_every_t=100,
                unconditional_guidance_scale=1.,
                unconditional_conditioning=None,
+               return_cross_attn=False,
                **kwargs
                ):
         
@@ -397,7 +398,7 @@ class DDIMSampler(object):
                                                     log_every_t=log_every_t,
                                                     unconditional_guidance_scale=unconditional_guidance_scale,
                                                     unconditional_conditioning=unconditional_conditioning,
-                                                    verbose=verbose,
+                                                    return_cross_attn=return_cross_attn, verbose=verbose,
                                                     **kwargs)
         return samples, intermediates
 
@@ -406,7 +407,7 @@ class DDIMSampler(object):
                       callback=None, x0=None, img_callback=None, 
                       log_every_t=100, temperature=1., noise_dropout=0., score_corrector=None, 
                       corrector_kwargs=None, unconditional_guidance_scale=1., unconditional_conditioning=None,
-                      verbose=True, **kwargs):
+                      return_cross_attn=False, verbose=True, **kwargs):
         device = self.model.betas.device        
         print('ddim device', device)
         b = shape[0]
@@ -431,15 +432,20 @@ class DDIMSampler(object):
                                       corrector_kwargs=corrector_kwargs,
                                       unconditional_guidance_scale=unconditional_guidance_scale,
                                       unconditional_conditioning=unconditional_conditioning,
-                                      step=i, **kwargs)
+                                      step=i, return_cross_attn=return_cross_attn, **kwargs)
             
-            img, pred_x0 = outs
+            if return_cross_attn:
+                img, pred_x0, cmaps = outs
+            else:
+                img, pred_x0 = outs
             if callback: callback(i)
             if img_callback: img_callback(pred_x0, i)
 
             if index % log_every_t == 0 or index == total_steps - 1:
                 intermediates['x_inter'].append(img.cpu())
                 #intermediates['pred_x0'].append(pred_x0)
+                if return_cross_attn:
+                    intermediates['cmaps'] = cmaps
 
         return img, intermediates
     
@@ -448,7 +454,7 @@ class DDIMSampler(object):
     def p_inverse_ddim(self, x, c, t, index, repeat_noise=False, temperature=1., 
                       noise_dropout=0., score_corrector=None, corrector_kwargs=None,
                       unconditional_guidance_scale=1., unconditional_conditioning=None,
-                      uc_type=None, conditional_guidance_scale_temporal=None, step=0, ddim_edit=0, **kwargs):
+                      uc_type=None, conditional_guidance_scale_temporal=None, step=0, ddim_edit=0, return_cross_attn=False, **kwargs):
         b, *_, device = *x.shape, x.device
         if x.dim() == 5:
             is_video = True
@@ -456,20 +462,30 @@ class DDIMSampler(object):
             is_video = False
         
         if unconditional_conditioning is None or unconditional_guidance_scale == 1.:
-            e_t = self.model.apply_model(x, t, c, **kwargs) # unet denoiser
+            out = self.model.apply_model(x, t, c, return_cross_attn=return_cross_attn, **kwargs) # unet denoiser
+            if return_cross_attn:
+                e_t, cmaps = out 
+            else:
+                e_t = out
         else:
             # with unconditional condition
             if step < ddim_edit:
-                e_t = self.model.apply_model(x, t, c, **kwargs)
+                out = self.model.apply_model(x, t, c, return_cross_attn=return_cross_attn, **kwargs)
                 e_t_uncond = self.model.apply_model(x, t, unconditional_conditioning, **kwargs)
             elif isinstance(c, torch.Tensor):
-                e_t = self.model.apply_model(x, t, c, **kwargs)
+                out = self.model.apply_model(x, t, c, return_cross_attn=return_cross_attn, **kwargs)
                 e_t_uncond = self.model.apply_model(x, t, unconditional_conditioning, **kwargs)
             elif isinstance(c, dict):
-                e_t = self.model.apply_model(x, t, c, **kwargs)
+                out = self.model.apply_model(x, t, c, return_cross_attn=return_cross_attn, **kwargs)
                 e_t_uncond = self.model.apply_model(x, t, unconditional_conditioning, **kwargs)
             else:
                 raise NotImplementedError
+            
+            if return_cross_attn:
+                e_t, cmaps = out 
+            else:
+                e_t = out
+
             # text cfg
             if uc_type is None:
                 e_t = e_t_uncond + unconditional_guidance_scale * (e_t - e_t_uncond)
@@ -525,4 +541,6 @@ class DDIMSampler(object):
         else:
             x_next = a_next.sqrt() * pred_x0 + dir_xprev + noise
 
+        if return_cross_attn:
+            x_next, pred_x0, cmaps 
         return x_next, pred_x0

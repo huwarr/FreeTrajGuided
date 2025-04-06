@@ -531,7 +531,7 @@ class UNetModel(nn.Module):
             zero_module(conv_nd(dims, model_channels, out_channels, 3, padding=1)),
         )
 
-    def forward(self, x, timesteps, context=None, features_adapter=None, fps=16, **kwargs):
+    def forward(self, x, timesteps, context=None, features_adapter=None, fps=16, return_cross_attn=False, **kwargs):
         t_emb = timestep_embedding(timesteps, self.model_channels, repeat_only=False)
         emb = self.time_embed(t_emb)
 
@@ -553,8 +553,14 @@ class UNetModel(nn.Module):
         h = x.type(self.dtype)
         adapter_idx = 0
         hs = []
+        cmaps = []
         for id, module in enumerate(self.input_blocks):
-            h = module(h, emb, context=context, batch_size=b, **kwargs)
+            print(module.__class__.__name__)
+            if module.__class__.__name__ == 'SpatialTransformer' and return_cross_attn:
+                h, cmaps_curr = module(h, emb, context=context, batch_size=b, return_cross_attn=return_cross_attn, **kwargs)
+                cmaps.append(cmaps_curr)
+            else:
+                h = module(h, emb, context=context, batch_size=b, **kwargs)
             if id ==0 and self.addition_attention:
                 h = self.init_attn(h, emb, context=context, batch_size=b, **kwargs)
             ## plug-in adapter features
@@ -565,17 +571,31 @@ class UNetModel(nn.Module):
         if features_adapter is not None:
             assert len(features_adapter)==adapter_idx, 'Wrong features_adapter'
 
-        h = self.middle_block(h, emb, context=context, batch_size=b, **kwargs)
+        #h = self.middle_block(h, emb, context=context, batch_size=b, **kwargs)
+        for module in self.middle_block:
+            if module.__class__.__name__ == 'SpatialTransformer' and return_cross_attn:
+                h, cmaps_curr = module(h, emb, context=context, batch_size=b, return_cross_attn=return_cross_attn, **kwargs)
+                cmaps.append(cmaps_curr)
+            else:
+                h = module(h, emb, context=context, batch_size=b, **kwargs)
+
         #print(h.shape)
         #for _ in hs:
             #print(_.shape)
         for module in self.output_blocks:
             h = torch.cat([h, hs.pop()], dim=1)
-            h = module(h, emb, context=context, batch_size=b, **kwargs)
+            if module.__class__.__name__ == 'SpatialTransformer' and return_cross_attn:
+                h, cmaps_curr = module(h, emb, context=context, batch_size=b, return_cross_attn=return_cross_attn, **kwargs)
+                cmaps.append(cmaps_curr)
+            else:
+                h = module(h, emb, context=context, batch_size=b, **kwargs)
         h = h.type(x.dtype)
         y = self.out(h)
         
         # reshape back to (b c t h w)
         y = rearrange(y, '(b t) c h w -> b c t h w', b=b)
-        return y
+        if return_cross_attn:
+            return y, cmaps
+        else:
+            return y
     
