@@ -218,6 +218,8 @@ def run_inference(args, gpu_num, gpu_no, **kwargs):
     ## latent noise shape
     _, channels, frames, h, w = latents.shape
     
+    print(paths)
+    
     ## step 3: run over samples
     ## -----------------------------------------------------------------
     start = time.time()
