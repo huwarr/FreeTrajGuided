@@ -14,6 +14,7 @@ from pytorch_lightning import seed_everything
 from funcs import load_model_checkpoint, load_video_batch, load_prompts, load_idx, load_traj, load_image_batch, get_filelist, save_videos, save_videos_with_bbox, save_videos_with_bbox_and_ref
 from funcs import batch_ddim_inversion, batch_ddim_sampling_freetraj, batch_ddim_sampling_freetraj_with_path
 from utils.utils import instantiate_from_config
+from utils.utils_freetraj import plan_path
 
 from torchvision.io import write_video
 from torchvision.transforms.functional import resize
@@ -119,6 +120,7 @@ def run_inference(args, gpu_num, gpu_no, **kwargs):
 
     # trajectory for FreeTraj: List([h_start, h_end, w_start, w_end], ...)
     paths = []
+    input_traj = []
 
     n_layers = len(cmaps[0])
     for frame in tqdm(range(frames), desc="Building trajectory from cross-attention maps"):
@@ -173,6 +175,9 @@ def run_inference(args, gpu_num, gpu_no, **kwargs):
         # add to paths
         paths.append([h_start, h_end, w_start, w_end])
 
+        if frame in [0, 6, 15]:
+            input_traj.append([frame, h_start, h_end, w_start, w_end])
+
     del inversed
     del intermediates
     torch.cuda.empty_cache()
@@ -218,7 +223,8 @@ def run_inference(args, gpu_num, gpu_no, **kwargs):
     ## latent noise shape
     _, channels, frames, h, w = latents.shape
     
-    print(paths)
+    # print(paths)
+    print(input_traj)
     
     ## step 3: run over samples
     ## -----------------------------------------------------------------
@@ -246,11 +252,14 @@ def run_inference(args, gpu_num, gpu_no, **kwargs):
         cond = {"c_crossattn": [text_emb], "fps": fps}
         
         ## inference
-        batch_samples = batch_ddim_sampling_freetraj_with_path(model, cond, noise_shape, args.n_samples, \
-                                                args.ddim_steps, args.ddim_eta, args.unconditional_guidance_scale, idx_list=idx_list, paths=paths, args=args, **kwargs)
+        batch_samples = batch_ddim_sampling_freetraj(model, cond, noise_shape, args.n_samples, \
+                                                args.ddim_steps, args.ddim_eta, args.unconditional_guidance_scale, idx_list=idx_list, input_traj=input_traj, args=args, **kwargs)
+        #batch_samples = batch_ddim_sampling_freetraj_with_path(model, cond, noise_shape, args.n_samples, \
+        #                                        args.ddim_steps, args.ddim_eta, args.unconditional_guidance_scale, idx_list=idx_list, paths=paths, args=args, **kwargs)
         ## b,samples,c,t,h,w
         # save_videos(batch_samples, args.savedir, filenames, fps=args.savefps)
-        save_videos_with_bbox_and_ref(video, batch_samples, args.savedir, bboxdir, refdir, filenames, fps=args.savefps, paths=paths)
+        paths_ = plan_path(input_traj)
+        save_videos_with_bbox_and_ref(video, batch_samples, args.savedir, bboxdir, refdir, filenames, fps=args.savefps, paths=paths_)
 
     print(f"Saved in {args.savedir}. Time used: {(time.time() - start):.2f} seconds")
     
