@@ -6,8 +6,8 @@ import cv2
 
 import torch
 import torchvision
-sys.path.insert(1, os.path.join("/notebooks/scripts/evaluation", '..', '..'))
-#sys.path.insert(1, os.path.join(sys.path[0], '..', '..'))
+#sys.path.insert(1, os.path.join("/notebooks/scripts/evaluation", '..', '..'))
+sys.path.insert(1, os.path.join(sys.path[0], '..', '..'))
 from lvdm.models.samplers.ddim import DDIMSampler
 from lvdm.models.samplers.ddim_freetraj import DDIMSampler as DDIMFreeTrajSampler
 
@@ -261,8 +261,8 @@ def batch_ddim_sampling_freetraj_with_path(model, cond, noise_shape, n_samples=1
             # paths: List([h_start, h_end, w_start, w_end], ...)
 
 
-            BOX_SIZE_H = min([he - hs for hs,he,ws,we in paths])
-            BOX_SIZE_W = min([we - ws for hs,he,ws,we in paths])
+            BOX_SIZE_H = paths[0][1] - paths[0][0]
+            BOX_SIZE_W = paths[0][3] - paths[0][2]
             sub_h = int(BOX_SIZE_H * h) 
             sub_w = int(BOX_SIZE_W * w)
             x_T_sub = torch.randn([args.n_samples, 1, channels, sub_h, sub_w], device=model.device)
@@ -522,8 +522,8 @@ def save_videos_with_bbox(batch_tensors, savedir, conddir, filenames, fps=10, in
 
 def save_videos_with_bbox_and_ref(ref_video, batch_tensors, savedir, bboxdir, refdir, filenames, fps=10, paths=[]):
     # b,samples,c,t,h,w
-    BOX_SIZE_H = min([he - hs for hs,he,ws,we in paths])
-    BOX_SIZE_W = min([we - ws for hs,he,ws,we in paths])
+    BOX_SIZE_H = paths[0][1] - paths[0][0]
+    BOX_SIZE_W = paths[0][3] - paths[0][2]
     n_samples = batch_tensors.shape[1]
     for idx, vid_tensor in enumerate(batch_tensors):
         video = vid_tensor.detach().cpu()
