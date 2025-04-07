@@ -261,8 +261,8 @@ def batch_ddim_sampling_freetraj_with_path(model, cond, noise_shape, n_samples=1
             # paths: List([h_start, h_end, w_start, w_end], ...)
 
 
-            BOX_SIZE_H = max([he - hs for hs,he,ws,we in paths])
-            BOX_SIZE_W = max([we - ws for hs,he,ws,we in paths])
+            BOX_SIZE_H = min([he - hs for hs,he,ws,we in paths])
+            BOX_SIZE_W = min([we - ws for hs,he,ws,we in paths])
             sub_h = int(BOX_SIZE_H * h) 
             sub_w = int(BOX_SIZE_W * w)
             x_T_sub = torch.randn([args.n_samples, 1, channels, sub_h, sub_w], device=model.device)
@@ -522,8 +522,8 @@ def save_videos_with_bbox(batch_tensors, savedir, conddir, filenames, fps=10, in
 
 def save_videos_with_bbox_and_ref(ref_video, batch_tensors, savedir, bboxdir, refdir, filenames, fps=10, paths=[]):
     # b,samples,c,t,h,w
-    BOX_SIZE_H = max([he - hs for hs,he,ws,we in paths])
-    BOX_SIZE_W = max([we - ws for hs,he,ws,we in paths])
+    BOX_SIZE_H = min([he - hs for hs,he,ws,we in paths])
+    BOX_SIZE_W = min([we - ws for hs,he,ws,we in paths])
     n_samples = batch_tensors.shape[1]
     for idx, vid_tensor in enumerate(batch_tensors):
         video = vid_tensor.detach().cpu()
