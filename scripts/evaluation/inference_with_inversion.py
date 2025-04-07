@@ -164,7 +164,7 @@ def run_inference(args, gpu_num, gpu_no, **kwargs):
         w_start = x
         w_end = x + w
         # get relative coords
-        ww, hh = cmap[0].shape
+        hh, ww = cmap[0].shape
         h_start /= hh
         h_end /= hh
         w_start /= ww
@@ -176,7 +176,7 @@ def run_inference(args, gpu_num, gpu_no, **kwargs):
     del inversed
     del intermediates
     torch.cuda.empty_cache()
-    
+
     # ----- FreeTraj starts here
 
     ## saving folders
