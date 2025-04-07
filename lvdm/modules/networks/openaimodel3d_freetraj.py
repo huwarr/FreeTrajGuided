@@ -33,20 +33,20 @@ class TimestepEmbedSequential(nn.Sequential, TimestepBlock):
     support it as an extra input.
     """
 
-    def forward(self, x, emb, context=None, batch_size=None, use_freetraj=False, return_cross_attn=False, **kwargs):
+    def forward(self, x, emb, context=None, batch_size=None, use_freetraj=False, use_freetraj_paths=False, return_cross_attn=False, **kwargs):
         cmaps = []
         #print(return_cross_attn)
         for layer in self:
             if isinstance(layer, TimestepBlock):
                 x = layer(x, emb, batch_size)
             elif isinstance(layer, SpatialTransformer):
-                x = layer(x, context, use_freetraj=use_freetraj, return_cross_attn=return_cross_attn, **kwargs)
+                x = layer(x, context, use_freetraj=use_freetraj, use_freetraj_paths=use_freetraj_paths, return_cross_attn=return_cross_attn, **kwargs)
                 if return_cross_attn and isinstance(x, tuple):
                     x, cmaps_curr = x
                     cmaps.append(cmaps_curr)
             elif isinstance(layer, TemporalTransformer):
                 x = rearrange(x, '(b f) c h w -> b c f h w', b=batch_size)
-                x = layer(x, context, use_freetraj=use_freetraj, **kwargs)
+                x = layer(x, context, use_freetraj=use_freetraj, use_freetraj_paths=use_freetraj_paths, **kwargs)
                 x = rearrange(x, 'b c f h w -> (b f) c h w')
             else:
                 x = layer(x,)

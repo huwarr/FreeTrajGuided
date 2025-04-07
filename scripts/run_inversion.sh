@@ -7,7 +7,8 @@ res_dir="results_inversion"
 ref_path="assets/reference_examples/car-roundabout-24.mp4"
 prompt_ref_file="prompts/inversion/text_ref.txt"
 prompt_gen_file="prompts/inversion/text.txt"
-idx_file="prompts/inversion/idx.txt"
+idx_ref_file="prompts/inversion/idx_ref.txt"
+idx_gen_file="prompts/inversion/idx.txt"
 
 
 python3 scripts/evaluation/inference_with_inversion.py \
@@ -22,7 +23,9 @@ python3 scripts/evaluation/inference_with_inversion.py \
 --ddim_eta 0.0 \
 --ref_path $ref_path \
 --prompt_ref_file $prompt_ref_file \
+--idx_ref_file $idx_ref_file \
 --prompt_gen_file $prompt_gen_file \
---idx_file $idx_file \
+--idx_gen_file $idx_gen_file \
 --ddim_edit 6 \
---fps 16
+--fps 16 \
+--quantile 0.85

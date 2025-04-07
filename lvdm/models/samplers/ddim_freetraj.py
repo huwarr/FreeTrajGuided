@@ -228,8 +228,15 @@ class DDIMSampler(object):
         else:
             # with unconditional condition
             if step < ddim_edit:
-                e_t = self.model.apply_model(x, t, c, use_freetraj=True, **kwargs)
-                e_t_uncond = self.model.apply_model(x, t, unconditional_conditioning, use_freetraj=True, **kwargs)
+                if 'input_traj' in kwargs:
+                    e_t = self.model.apply_model(x, t, c, use_freetraj=True, **kwargs)
+                    e_t_uncond = self.model.apply_model(x, t, unconditional_conditioning, use_freetraj=True, **kwargs)
+                elif 'paths' in kwargs:
+                    e_t = self.model.apply_model(x, t, c, use_freetraj_paths=True, **kwargs)
+                    e_t_uncond = self.model.apply_model(x, t, unconditional_conditioning, use_freetraj_paths=True, **kwargs)
+                else:
+                    e_t = self.model.apply_model(x, t, c, **kwargs)
+                    e_t_uncond = self.model.apply_model(x, t, unconditional_conditioning, **kwargs)
             elif isinstance(c, torch.Tensor):
                 e_t = self.model.apply_model(x, t, c, **kwargs)
                 e_t_uncond = self.model.apply_model(x, t, unconditional_conditioning, **kwargs)

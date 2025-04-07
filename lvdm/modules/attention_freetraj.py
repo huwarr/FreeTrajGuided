@@ -104,7 +104,7 @@ class CrossAttention(nn.Module):
             if XFORMERS_IS_AVAILBLE and temporal_length is None:
                 self.forward = self.space_forward
 
-    def forward(self, x, context=None, mask=None, use_freetraj=False, idx_list=[], input_traj=[], return_cross_attn=False):
+    def forward(self, x, context=None, mask=None, use_freetraj=False, idx_list=[], input_traj=[], return_cross_attn=False, use_freetraj_paths=False, paths=[]):
         h = self.heads
 
         q = self.to_q(x)
@@ -131,6 +131,16 @@ class CrossAttention(nn.Module):
             PATHS = plan_path(input_traj)
             sub_h = int(BOX_SIZE_H * h_len) 
             sub_w = int(BOX_SIZE_W * w_len)
+        elif use_freetraj_paths:
+            hw = q.shape[0]
+            w_base = 64
+            h_base = 40
+            w_len = int((hw / w_base / h_base) ** 0.5 * w_base)
+            h_len = int(hw / w_len)
+            BOX_SIZE_H = max([he - hs for hs,he,ws,we in paths])
+            BOX_SIZE_W = max([we - ws for hs,he,ws,we in paths])
+            sub_h = int(BOX_SIZE_H * h_len) 
+            sub_w = int(BOX_SIZE_W * w_len)
 
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> (b h) n d', h=h), (q, k, v))
         sim = torch.einsum('b i d, b j d -> b i j', q, k) * self.scale
@@ -141,14 +151,20 @@ class CrossAttention(nn.Module):
             sim += sim2
         del k
 
-        if use_freetraj:
+        if use_freetraj or use_freetraj_paths:
             sim = rearrange(sim, '(y x h) i j -> y x h i j', h=h, y=h_len)
             sim_mask = torch.zeros_like(sim)
             for i in range(sim.shape[3]):
-                h_start1 = int(PATHS[i][0] * h_len)
-                h_end1 = h_start1 + sub_h
-                w_start1 = int(PATHS[i][2] * w_len)
-                w_end1 = w_start1 + sub_w
+                if use_freetraj:
+                    h_start1 = int(PATHS[i][0] * h_len)
+                    h_end1 = h_start1 + sub_h
+                    w_start1 = int(PATHS[i][2] * w_len)
+                    w_end1 = w_start1 + sub_w
+                else:
+                    h_start1 = int(paths[i][0] * h_len)
+                    h_end1 = h_start1 + sub_h
+                    w_start1 = int(paths[i][2] * w_len)
+                    w_end1 = w_start1 + sub_w
 
                 h_fg1 = list(range(h_start1, h_end1))
                 h_fg_tensor1 = torch.zeros(h_len, device=sim.device)
@@ -160,10 +176,16 @@ class CrossAttention(nn.Module):
                 bg_tensor1 = 1 - fg_tensor1
 
                 for j in range(sim.shape[4]):
-                    h_start2 = int(PATHS[j][0] * h_len)
-                    h_end2 = h_start2 + sub_h
-                    w_start2 = int(PATHS[j][2] * w_len)
-                    w_end2 = w_start2 + sub_w
+                    if use_freetraj:
+                        h_start2 = int(PATHS[j][0] * h_len)
+                        h_end2 = h_start2 + sub_h
+                        w_start2 = int(PATHS[j][2] * w_len)
+                        w_end2 = w_start2 + sub_w
+                    else:
+                        h_start2 = int(paths[j][0] * h_len)
+                        h_end2 = h_start2 + sub_h
+                        w_start2 = int(paths[j][2] * w_len)
+                        w_end2 = w_start2 + sub_w
 
                     h_fg2 = list(range(h_start2, h_end2))
                     h_fg_tensor2 = torch.zeros(h_len, device=sim.device)
@@ -213,7 +235,7 @@ class CrossAttention(nn.Module):
 
         return self.to_out(out)
     
-    def space_forward(self, x, context=None, mask=None, use_freetraj=False, idx_list=[], input_traj=[], return_cross_attn=False):
+    def space_forward(self, x, context=None, mask=None, use_freetraj=False, idx_list=[], input_traj=[], return_cross_attn=False, use_freetraj_paths=False, paths=[]):
         
         if context is None:
             SA_flag = True
@@ -247,6 +269,16 @@ class CrossAttention(nn.Module):
             PATHS = plan_path(input_traj)
             sub_h = int(BOX_SIZE_H * h_len) 
             sub_w = int(BOX_SIZE_W * w_len)
+        elif use_freetraj_paths:
+            hw = q.shape[1]
+            w_base = 64
+            h_base = 40
+            w_len = int((hw / h_base / w_base) ** 0.5 * w_base)
+            h_len = int(hw / w_len)
+            BOX_SIZE_H = max([he - hs for hs,he,ws,we in paths])
+            BOX_SIZE_W = max([we - ws for hs,he,ws,we in paths])
+            sub_h = int(BOX_SIZE_H * h_len) 
+            sub_w = int(BOX_SIZE_W * w_len)
 
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> (b h) n d', h=h), (q, k, v))
         sim = torch.einsum('b i d, b j d -> b i j', q, k) * self.scale
@@ -257,7 +289,7 @@ class CrossAttention(nn.Module):
             sim += sim2
         del k
 
-        if use_freetraj:
+        if use_freetraj or use_freetraj_paths:
             coef_a = 0.25 / (BOX_SIZE_H * BOX_SIZE_W) / len(idx_list)
             weight = gaussian_weight(sub_h, sub_w).to(x.device)
             if SA_flag:
@@ -266,10 +298,16 @@ class CrossAttention(nn.Module):
                 sim = rearrange(sim, '(t h) (y x) (y0 x0) -> t h y x y0 x0', h=h, y=h_len, y0=h_len)
                 sim_mask = torch.zeros_like(sim)
                 for i in range(sim.shape[0]):
-                    h_start = int(PATHS[i][0] * h_len)
-                    h_end = h_start + sub_h
-                    w_start = int(PATHS[i][2] * w_len)
-                    w_end = w_start + sub_w
+                    if use_freetraj:
+                        h_start = int(PATHS[i][0] * h_len)
+                        h_end = h_start + sub_h
+                        w_start = int(PATHS[i][2] * w_len)
+                        w_end = w_start + sub_w
+                    else:
+                        h_start = int(paths[i][0] * h_len)
+                        h_end = h_start + sub_h
+                        w_start = int(paths[i][2] * w_len)
+                        w_end = w_start + sub_w
 
                     h_fg = list(range(h_start, h_end))
                     h_fg_tensor = torch.zeros(h_len, device=sim.device)
@@ -293,10 +331,16 @@ class CrossAttention(nn.Module):
                 weight_add = torch.zeros_like(sim)
                 weight_map = torch.zeros([sim.shape[0], h_len, w_len], device=sim.device)
                 for i in range(sim.shape[0]):
-                    h_start = int(PATHS[i][0] * h_len)
-                    h_end = h_start + sub_h
-                    w_start = int(PATHS[i][2] * w_len)
-                    w_end = w_start + sub_w
+                    if use_freetraj:
+                        h_start = int(PATHS[i][0] * h_len)
+                        h_end = h_start + sub_h
+                        w_start = int(PATHS[i][2] * w_len)
+                        w_end = w_start + sub_w
+                    else:
+                        h_start = int(paths[i][0] * h_len)
+                        h_end = h_start + sub_h
+                        w_start = int(paths[i][2] * w_len)
+                        w_end = w_start + sub_w
 
                     h_fg = list(range(h_start, h_end))
                     h_fg_tensor = torch.zeros(h_len, device=sim.device)
@@ -378,7 +422,7 @@ class BasicTransformerBlock(nn.Module):
         self.norm3 = nn.LayerNorm(dim)
         self.checkpoint = checkpoint
 
-    def forward(self, x, context=None, mask=None, use_freetraj=False, idx_list=[], input_traj=[],  return_cross_attn=False, **kwargs):
+    def forward(self, x, context=None, mask=None, use_freetraj=False, idx_list=[], input_traj=[], return_cross_attn=False, use_freetraj_paths=False, paths=[], **kwargs):
         ## implementation tricks: because checkpointing doesn't support non-tensor (e.g. None or scalar) arguments
         input_tuple = (x,)      ## should not be (x), otherwise *input_tuple will decouple x into multiple arguments
         if context is not None:
@@ -388,12 +432,12 @@ class BasicTransformerBlock(nn.Module):
             return checkpoint(forward_mask, (x,), self.parameters(), self.checkpoint)
         if context is not None and mask is not None:
             input_tuple = (x, context, mask)
-        input_tuple = (x, context, mask, use_freetraj, idx_list, input_traj, return_cross_attn)
+        input_tuple = (x, context, mask, use_freetraj, idx_list, input_traj,  return_cross_attn, use_freetraj_paths, paths)
         return checkpoint(self._forward, input_tuple, self.parameters(), self.checkpoint)
 
-    def _forward(self, x, context=None, mask=None, use_freetraj=False, idx_list=[], input_traj=[], return_cross_attn=False):
-        x = self.attn1(self.norm1(x), context=context if self.disable_self_attn else None, mask=mask, use_freetraj=use_freetraj, idx_list=idx_list, input_traj=input_traj, return_cross_attn=False) + x
-        out = self.attn2(self.norm2(x), context=context, mask=mask, use_freetraj=use_freetraj, idx_list=idx_list, input_traj=input_traj, return_cross_attn=return_cross_attn)
+    def _forward(self, x, context=None, mask=None, use_freetraj=False, idx_list=[], input_traj=[], return_cross_attn=False, use_freetraj_paths=False, paths=[]):
+        x = self.attn1(self.norm1(x), context=context if self.disable_self_attn else None, mask=mask, use_freetraj=use_freetraj, idx_list=idx_list, input_traj=input_traj, return_cross_attn=False, use_freetraj_paths=use_freetraj_paths, paths=paths) + x
+        out = self.attn2(self.norm2(x), context=context, mask=mask, use_freetraj=use_freetraj, idx_list=idx_list, input_traj=input_traj, return_cross_attn=return_cross_attn, use_freetraj_paths=use_freetraj_paths, paths=paths)
         if return_cross_attn:
             out, cmap = out
         x = out + x

@@ -11,11 +11,12 @@ from functools import partial
 import torch
 from pytorch_lightning import seed_everything
 
-from funcs import load_model_checkpoint, load_video_batch, load_prompts, load_idx, load_traj, load_image_batch, get_filelist, save_videos, save_videos_with_bbox
-from funcs import batch_ddim_inversion, batch_ddim_sampling_freetraj
+from funcs import load_model_checkpoint, load_video_batch, load_prompts, load_idx, load_traj, load_image_batch, get_filelist, save_videos, save_videos_with_bbox, save_videos_with_bbox_and_ref
+from funcs import batch_ddim_inversion, batch_ddim_sampling_freetraj, batch_ddim_sampling_freetraj_with_path
 from utils.utils import instantiate_from_config
 
 from torchvision.io import write_video
+from torchvision.transforms.functional import resize
 
 
 def get_parser():
@@ -37,7 +38,10 @@ def get_parser():
     parser.add_argument("--unconditional_guidance_scale", type=float, default=1.0, help="prompt classifier-free guidance")
     parser.add_argument("--unconditional_guidance_scale_temporal", type=float, default=None, help="temporal consistency guidance")
     parser.add_argument("--ddim_edit", type=int, default=6, help="steps of ddim for edited attention")
-    parser.add_argument("--idx_file", type=str, default=None, help="a index file containing many prompts")
+    parser.add_argument("--idx_ref_file", type=str, default=None, help="a index file containing many prompts")
+    parser.add_argument("--idx_gen_file", type=str, default=None, help="a index file containing many prompts")
+    parser.add_argument("--quantile", type=float, default=0.85, help="quantile for binarizing cross-attention maps")
+    parser.add_argument("--kernel_size", type=int, default=5, help="kernel size for binary morphology")
     return parser
 
 
@@ -85,8 +89,8 @@ def run_inference(args, gpu_num, gpu_no, **kwargs):
     
     # video -> latents
     latents = model.encode_first_stage_2DAE(video)
-    vs = video.shape
-    del video
+    video = video.cpu()
+    #del video
     torch.cuda.empty_cache()
 
     assert os.path.exists(args.prompt_ref_file), "Error: reference video prompt file NOT Found!"
@@ -97,107 +101,158 @@ def run_inference(args, gpu_num, gpu_no, **kwargs):
     cond = {"c_crossattn": [text_ref_emb], "fps": fps}
 
     # inversion
-    inversed = batch_ddim_inversion(
-        model, cond, latents, args.ddim_steps, args.ddim_eta, args.unconditional_guidance_scale, **kwargs
+    inversed, intermediates = batch_ddim_inversion(
+        model, cond, latents, args.ddim_steps, args.ddim_eta, args.unconditional_guidance_scale, log_every_t=1, return_cross_attn=True, **kwargs
     )
+    # filter cross attention maps
+    cmaps = []
+    for i in range(len(intermediates['cmaps'])):
+        cmaps_curr = intermediates['cmaps'][i]
+        cmaps.append([])
+        for j in range(len(cmaps_curr)):
+            if len(cmaps_curr[j]) > 0:
+                cmaps[-1].append(cmaps_curr[j][0][0])
 
-    print(vs)
-    print(latents.shape)
-    print(inversed.shape)
+    # Get token index
+    idx_list_ref = load_idx(args.idx_ref_file) # [[i]]
+    ind_ref = idx_list_ref[0][0]
 
+    # trajectory for FreeTraj: List([h_start, h_end, w_start, w_end], ...)
+    paths = []
 
+    n_layers = len(cmaps[0])
+    for frame in tqdm(range(frames), desc="Building trajectory from cross-attention maps"):
+        # Compute average cross-attention map for given frame and provided token index
+        cmaps_l = []
+        for i in range(args.ddim_steps):
+            cmaps_t = []
+            for j in range(n_layers):
+                # select timestep
+                cmaps_curr = cmaps[i]
+                # select layer
+                cmap = cmaps_curr[j]
+                # select word, +1 for <start_of_text>
+                cmap = cmap[..., ind_ref+1]
+                # reshape to [C, F, H, W]
+                sz = int((cmap.shape[-1] / (inversed.shape[-1] / inversed.shape[-2])) ** (1/2))
+                cmap = cmap.reshape(-1, frames, sz, int(sz * 1.6))
+                # average over C
+                cmap = cmap.mean(dim=0)[frame].unsqueeze(0)
+                
+                if len(cmaps_t) == 0:
+                    cmaps_t.append(cmap)
+                else:
+                    cmap = resize(cmap, cmaps_t[0].shape[1:])
+                    cmaps_t.append(cmap)
+            cmap = torch.stack(cmaps_t).mean(0)
+            cmaps_l.append(cmap)
+        cmap = torch.stack(cmaps_l).mean(0)
 
+        # binarize
+        thresh = np.quantile(cmap.numpy(), args.quantile)
+        cmap = cmap.numpy() > thresh
 
+        # remove noise with binary morphology (opening)
+        kernel = np.ones((args.kernel_size, args.kernel_size), np.uint8)
+        cmap = cv2.morphologyEx(cmap.astype(np.uint8), cv2.MORPH_OPEN, kernel)
 
+        # compute bbox
+        x,y,w,h = cv2.boundingRect(cv2.findNonZero(cmap[0]))
+        # x,y,w,h -> h_start,h_end,w_start,w_end
+        h_start = y
+        h_end = y + h
+        w_start = x
+        w_end = x + w
+        # get relative coords
+        ww, hh = cmap[0].shape
+        h_start /= hh
+        h_end /= hh
+        w_start /= ww
+        w_end /= ww
 
+        # add to paths
+        paths.append([h_start, h_end, w_start, w_end])
 
-    ### latent noise shape
-    #h, w = args.height // 8, args.width // 8
-    ##frames = model.temporal_length if args.frames < 0 else args.frames
-    #channels = model.channels
-    #
-    ### saving folders
-    #os.makedirs(args.savedir, exist_ok=True)
-    #bboxdir = os.path.join(args.savedir, "bbox")
-    #os.makedirs(bboxdir, exist_ok=True)
-#
-    ### step 2: load data
-    ### -----------------------------------------------------------------
-    #assert os.path.exists(args.prompt_file), "Error: prompt file NOT Found!"
-    #prompt_list = load_prompts(args.prompt_file)
-    #idx_list_rank = load_idx(args.idx_file)
+    del inversed
+    del intermediates
+    torch.cuda.empty_cache()
+    
+    # ----- FreeTraj starts here
+
+    ## saving folders
+    os.makedirs(args.savedir, exist_ok=True)
+    bboxdir = os.path.join(args.savedir, "bbox")
+    os.makedirs(bboxdir, exist_ok=True)
+    refdir = os.path.join(args.savedir, "reference")
+    os.makedirs(refdir, exist_ok=True)
+
+    ## step 2: load data
+    ## -----------------------------------------------------------------
+    assert os.path.exists(args.prompt_gen_file), "Error: generation prompt file NOT Found!"
+    prompt_list = load_prompts(args.prompt_gen_file)
+    idx_list_rank = load_idx(args.idx_gen_file)
     #input_traj = load_traj(args.traj_file)
-    #print(prompt_list)
-    #print(idx_list_rank)
+    print(prompt_list)
+    print(idx_list_rank)
     #print(input_traj)
-#
-    #num_samples = len(prompt_list)
-    #filename_list = [f"{id+1:04d}" for id in range(num_samples)]
-#
-    #samples_split = num_samples // gpu_num
-    #residual_tail = num_samples % gpu_num
-    #print(f'[rank:{gpu_no}] {samples_split}/{num_samples} samples loaded.')
-    #indices = list(range(samples_split*gpu_no, samples_split*(gpu_no+1)))
-    #if gpu_no == 0 and residual_tail != 0:
-    #    indices = indices + list(range(num_samples-residual_tail, num_samples))
-    #prompt_list_rank = [prompt_list[i] for i in indices]
-#
-    ### conditional input
-    #if args.mode == "i2v":
-    #    ## each video or frames dir per prompt
-    #    cond_inputs = get_filelist(args.cond_input, ext='[mpj][pn][4gj]')   # '[mpj][pn][4gj]'
-    #    assert len(cond_inputs) == num_samples, f"Error: conditional input ({len(cond_inputs)}) NOT match prompt ({num_samples})!"
-    #    filename_list = [f"{os.path.split(cond_inputs[id])[-1][:-4]}" for id in range(num_samples)]
-    #    cond_inputs_rank = [cond_inputs[i] for i in indices]
-#
-    #filename_list_rank = [filename_list[i] for i in indices]
-    #
-    #assert len(idx_list_rank) == len(filename_list_rank), "Error: metas are not paired!"
-#
-#
-    ### step 3: run over samples
-    ### -----------------------------------------------------------------
-    #start = time.time()
-    #n_rounds = len(prompt_list_rank) // args.bs
-    #n_rounds = n_rounds+1 if len(prompt_list_rank) % args.bs != 0 else n_rounds
-    #for idx in range(0, n_rounds):
-    #    print(f'[rank:{gpu_no}] batch-{idx+1} ({args.bs})x{args.n_samples} ...', flush=True)
-    #    idx_s = idx*args.bs
-    #    idx_e = min(idx_s+args.bs, len(prompt_list_rank))
-    #    batch_size = idx_e - idx_s
-    #    filenames = filename_list_rank[idx_s:idx_e]
-    #    noise_shape = [batch_size, channels, frames, h, w]
-    #    fps = torch.tensor([args.fps]*batch_size).to(model.device).long()
-#
-    #    idx_list = idx_list_rank[idx_s:idx_e][0]
-    #    # print(idx_list)
-#
-    #    prompts = prompt_list_rank[idx_s:idx_e]
-    #    if isinstance(prompts, str):
-    #        prompts = [prompts]
-    #    #prompts = batch_size * [""]
-    #    text_emb = model.get_learned_conditioning(prompts)
-#
-    #    if args.mode == 'base':
-    #        cond = {"c_crossattn": [text_emb], "fps": fps}
-    #    elif args.mode == 'i2v':
-    #        #cond_images = torch.zeros(noise_shape[0],3,224,224).to(model.device)
-    #        cond_images = load_image_batch(cond_inputs_rank[idx_s:idx_e], (args.height, args.width))
-    #        cond_images = cond_images.to(model.device)
-    #        img_emb = model.get_image_embeds(cond_images)
-    #        imtext_cond = torch.cat([text_emb, img_emb], dim=1)
-    #        cond = {"c_crossattn": [imtext_cond], "fps": fps}
-    #    else:
-    #        raise NotImplementedError
-#
-    #    ## inference
-    #    batch_samples = batch_ddim_sampling_freetraj(model, cond, noise_shape, args.n_samples, \
-    #                                            args.ddim_steps, args.ddim_eta, args.unconditional_guidance_scale, idx_list=idx_list, input_traj=input_traj, args=args, **kwargs)
-    #    ## b,samples,c,t,h,w
-    #    # save_videos(batch_samples, args.savedir, filenames, fps=args.savefps)
-    #    save_videos_with_bbox(batch_samples, args.savedir, bboxdir, filenames, fps=args.savefps, input_traj=input_traj)
-#
-    #print(f"Saved in {args.savedir}. Time used: {(time.time() - start):.2f} seconds")
+
+    num_samples = len(prompt_list)
+    filename_list = [f"{id+1:04d}" for id in range(num_samples)]
+
+    samples_split = num_samples // gpu_num
+    residual_tail = num_samples % gpu_num
+    print(f'[rank:{gpu_no}] {samples_split}/{num_samples} samples loaded.')
+    indices = list(range(samples_split*gpu_no, samples_split*(gpu_no+1)))
+    if gpu_no == 0 and residual_tail != 0:
+        indices = indices + list(range(num_samples-residual_tail, num_samples))
+    prompt_list_rank = [prompt_list[i] for i in indices]
+    filename_list_rank = [filename_list[i] for i in indices]
+    
+    assert len(idx_list_rank) == len(filename_list_rank), "Error: metas are not paired!"
+
+    del cond
+    del fps 
+    del text_ref_emb
+    torch.cuda.empty_cache()
+
+    ## latent noise shape
+    _, channels, frames, h, w = latents.shape
+    
+    ## step 3: run over samples
+    ## -----------------------------------------------------------------
+    start = time.time()
+    n_rounds = len(prompt_list_rank) // args.bs
+    n_rounds = n_rounds+1 if len(prompt_list_rank) % args.bs != 0 else n_rounds
+    for idx in range(0, n_rounds):
+        print(f'[rank:{gpu_no}] batch-{idx+1} ({args.bs})x{args.n_samples} ...', flush=True)
+        idx_s = idx*args.bs
+        idx_e = min(idx_s+args.bs, len(prompt_list_rank))
+        batch_size = idx_e - idx_s
+        filenames = filename_list_rank[idx_s:idx_e]
+        noise_shape = [batch_size, channels, frames, h, w]
+        fps = torch.tensor([args.fps]*batch_size).to(model.device).long()
+
+        idx_list = idx_list_rank[idx_s:idx_e][0]
+        # print(idx_list)
+
+        prompts = prompt_list_rank[idx_s:idx_e]
+        if isinstance(prompts, str):
+            prompts = [prompts]
+        #prompts = batch_size * [""]
+        text_emb = model.get_learned_conditioning(prompts)
+
+        cond = {"c_crossattn": [text_emb], "fps": fps}
+        
+        ## inference
+        batch_samples = batch_ddim_sampling_freetraj_with_path(model, cond, noise_shape, args.n_samples, \
+                                                args.ddim_steps, args.ddim_eta, args.unconditional_guidance_scale, idx_list=idx_list, paths=paths, args=args, **kwargs)
+        ## b,samples,c,t,h,w
+        # save_videos(batch_samples, args.savedir, filenames, fps=args.savefps)
+        save_videos_with_bbox_and_ref(video, batch_samples, args.savedir, bboxdir, refdir, filenames, fps=args.savefps, paths=paths)
+
+    print(f"Saved in {args.savedir}. Time used: {(time.time() - start):.2f} seconds")
+    
+
 
 
 if __name__ == '__main__':
