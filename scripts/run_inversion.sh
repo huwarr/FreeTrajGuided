@@ -28,4 +28,4 @@ python3 scripts/evaluation/inference_with_inversion.py \
 --idx_gen_file $idx_gen_file \
 --ddim_edit 6 \
 --fps 16 \
---quantile 0.95
+--quantile 0.9
