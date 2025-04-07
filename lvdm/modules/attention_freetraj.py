@@ -137,8 +137,8 @@ class CrossAttention(nn.Module):
             h_base = 40
             w_len = int((hw / w_base / h_base) ** 0.5 * w_base)
             h_len = int(hw / w_len)
-            BOX_SIZE_H = paths[0][1] - paths[0][0]
-            BOX_SIZE_W = paths[0][3] - paths[0][2]
+            BOX_SIZE_H = min([he - hs for hs, he, ws, we in paths])
+            BOX_SIZE_W = min([we - ws for hs, he, ws, we in paths])
             sub_h = int(BOX_SIZE_H * h_len) 
             sub_w = int(BOX_SIZE_W * w_len)
 
@@ -275,8 +275,8 @@ class CrossAttention(nn.Module):
             h_base = 40
             w_len = int((hw / h_base / w_base) ** 0.5 * w_base)
             h_len = int(hw / w_len)
-            BOX_SIZE_H = paths[0][1] - paths[0][0]
-            BOX_SIZE_W = paths[0][3] - paths[0][2]
+            BOX_SIZE_H = min([he - hs for hs, he, ws, we in paths])
+            BOX_SIZE_W = min([we - ws for hs, he, ws, we in paths])
             sub_h = int(BOX_SIZE_H * h_len) 
             sub_w = int(BOX_SIZE_W * w_len)
 
