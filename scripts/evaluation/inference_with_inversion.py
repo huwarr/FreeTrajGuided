@@ -122,13 +122,13 @@ def run_inference(args, gpu_num, gpu_no, **kwargs):
     paths = []
     input_traj = []
 
-    n_layers = len(cmaps[0])
+    #n_layers = len(cmaps[0])
     for frame in tqdm(range(frames), desc="Building trajectory from cross-attention maps"):
         # Compute average cross-attention map for given frame and provided token index
         cmaps_l = []
-        for i in range(args.ddim_steps):
+        for i in range(15):#range(args.ddim_steps):
             cmaps_t = []
-            for j in range(n_layers):
+            for j in [5, 6, 7, 8]:#range(n_layers):
                 # select timestep
                 cmaps_curr = cmaps[i]
                 # select layer
@@ -155,11 +155,11 @@ def run_inference(args, gpu_num, gpu_no, **kwargs):
         cmap = cmap.numpy() > thresh
 
         # remove noise with binary morphology (opening)
-        kernel = np.ones((args.kernel_size, args.kernel_size), np.uint8)
-        cmap = cv2.morphologyEx(cmap.astype(np.uint8), cv2.MORPH_OPEN, kernel)
+        #kernel = np.ones((args.kernel_size, args.kernel_size), np.uint8)
+        #cmap = cv2.morphologyEx(cmap.astype(np.uint8), cv2.MORPH_OPEN, kernel)
 
         # compute bbox
-        x,y,w,h = cv2.boundingRect(cv2.findNonZero(cmap[0]))
+        x,y,w,h = cv2.boundingRect(cv2.findNonZero(cmap.astype(np.uint8)[0]))
         # x,y,w,h -> h_start,h_end,w_start,w_end
         h_start = y
         h_end = y + h
@@ -224,7 +224,7 @@ def run_inference(args, gpu_num, gpu_no, **kwargs):
     _, channels, frames, h, w = latents.shape
     
     # print(paths)
-    print(input_traj)
+    # print(input_traj)
     
     ## step 3: run over samples
     ## -----------------------------------------------------------------
@@ -259,7 +259,7 @@ def run_inference(args, gpu_num, gpu_no, **kwargs):
         ## b,samples,c,t,h,w
         # save_videos(batch_samples, args.savedir, filenames, fps=args.savefps)
         paths_ = plan_path(input_traj)
-        save_videos_with_bbox_and_ref(video, batch_samples, args.savedir, bboxdir, refdir, filenames, fps=args.savefps, paths=paths_)
+        save_videos_with_bbox_and_ref(video, batch_samples, args.savedir, bboxdir, refdir, filenames, fps=args.savefps, paths=paths)
 
     print(f"Saved in {args.savedir}. Time used: {(time.time() - start):.2f} seconds")
     
