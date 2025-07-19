@@ -18,16 +18,17 @@ from utils.utils_freetraj import plan_path
 
 from torchvision.io import write_video
 from torchvision.transforms.functional import resize
+from scipy.ndimage import gaussian_filter
 
 
 def get_parser():
     parser = argparse.ArgumentParser()
     parser.add_argument("--seed", type=int, default=20230211, help="seed for seed_everything")
-    parser.add_argument("--ckpt_path", type=str, default=None, help="checkpoint path")
-    parser.add_argument("--config", type=str, help="config (yaml) path")
-    parser.add_argument("--ref_path", type=str, default=None, help="path to the reference video")
-    parser.add_argument("--prompt_ref_file", type=str, default=None, help="a text file containing reference prompts")
-    parser.add_argument("--prompt_gen_file", type=str, default=None, help="a text file containing generation prompts")
+    parser.add_argument("--ckpt_path", type=str, default="checkpoints/base_512_v2/model.ckpt", help="checkpoint path")
+    parser.add_argument("--config", type=str, default="configs/inference_t2v_freetraj_512_v2.0.yaml", help="config (yaml) path")
+    parser.add_argument("--ref_path", type=str, default="assets/reference_examples/car-roundabout-24.mp4", help="path to the reference video")
+    parser.add_argument("--prompt_ref_file", type=str, default="prompts/inversion/text_ref.txt", help="a text file containing reference prompts")
+    parser.add_argument("--prompt_gen_file", type=str, default="prompts/inversion/text.txt", help="a text file containing generation prompts")
     parser.add_argument("--savedir", type=str, default=None, help="results saving path")
     parser.add_argument("--savefps", type=str, default=10, help="video fps to generate")
     parser.add_argument("--n_samples", type=int, default=1, help="num of samples per prompt")
@@ -35,14 +36,15 @@ def get_parser():
     parser.add_argument("--ddim_eta", type=float, default=1.0, help="eta for ddim sampling (0.0 yields deterministic sampling)")
     parser.add_argument("--bs", type=int, default=1, help="batch size for inference")
     parser.add_argument("--max_size", type=int, default=512, help="maximum size (1 dimension) of the video")
-    parser.add_argument("--fps", type=int, default=24)
     parser.add_argument("--unconditional_guidance_scale", type=float, default=1.0, help="prompt classifier-free guidance")
     parser.add_argument("--unconditional_guidance_scale_temporal", type=float, default=None, help="temporal consistency guidance")
     parser.add_argument("--ddim_edit", type=int, default=6, help="steps of ddim for edited attention")
-    parser.add_argument("--idx_ref_file", type=str, default=None, help="a index file containing many prompts")
-    parser.add_argument("--idx_gen_file", type=str, default=None, help="a index file containing many prompts")
+    parser.add_argument("--idx_ref_file", type=str, default="prompts/inversion/idx_ref.txt", help="a index file containing many prompts")
+    parser.add_argument("--idx_gen_file", type=str, default="prompts/inversion/idx.txt", help="a index file containing many prompts")
     parser.add_argument("--quantile", type=float, default=0.85, help="quantile for binarizing cross-attention maps")
     parser.add_argument("--kernel_size", type=int, default=5, help="kernel size for binary morphology")
+    parser.add_argument("--sigma", type=int, default=4, help="sigma for Gaussian smoothing")
+    parser.add_argument("--size_frac", type=float, default=0.3, help="fraction of size for bbox, based on center of mass")
     return parser
 
 
@@ -68,19 +70,26 @@ def run_inference(args, gpu_num, gpu_no, **kwargs):
     frames = min(model.temporal_length, init_frames)
     print(f"Frame cut: {frames} x {init_height} x {init_width}")
     
-    assert (args.max_size % 64 == 0), "Error: size should be multiple of 64"
-    if init_height > init_width:
-        height = args.max_size
-        width = int((height / init_height) * init_width)
-        print(f"Resizing: {frames} x {height} x {width}")
-        width = ((width - 1) // 64 + 1) * 64
-        print(f"Aligning: {frames} x {height} x {width}")
-    else:
-        width = args.max_size
-        height = int((width / init_width) * init_height)
-        print(f"Resizing: {frames} x {height} x {width}")
-        height = ((height - 1) // 64 + 1) * 64
-        print(f"Aligning: {frames} x {height} x {width}")
+    init_fps = video_tmp.get(cv2.CAP_PROP_FPS)
+    print(f"Initial fps: {init_fps}")
+    fps_n = int(frames / (init_frames / init_fps))
+    print(f"Extracted fps: {fps_n}")
+    
+    # assert (args.max_size % 64 == 0), "Error: size should be multiple of 64"
+    # if init_height > init_width:
+    #     height = args.max_size
+    #     width = int((height / init_height) * init_width)
+    #     print(f"Resizing: {frames} x {height} x {width}")
+    #     width = ((width - 1) // 64 + 1) * 64
+    #     print(f"Aligning: {frames} x {height} x {width}")
+    # else:
+    #     width = args.max_size
+    #     height = int((width / init_width) * init_height)
+    #     print(f"Resizing: {frames} x {height} x {width}")
+    #     height = ((height - 1) // 64 + 1) * 64
+    #     print(f"Aligning: {frames} x {height} x {width}")
+    height = 320
+    width = 512
 
     video = load_video_batch([args.ref_path], 1, video_size=(height, width), video_frames=frames).to(model.device)
     # B x C x F x H x W
@@ -98,9 +107,12 @@ def run_inference(args, gpu_num, gpu_no, **kwargs):
     prompt_ref_list = load_prompts(args.prompt_ref_file)
     # embed text
     text_ref_emb = model.get_learned_conditioning(prompt_ref_list)
-    fps = torch.tensor([args.fps]*latents.shape[0]).to(model.device).long()
+    fps = torch.tensor([fps_n]*latents.shape[0]).to(model.device).long()
     cond = {"c_crossattn": [text_ref_emb], "fps": fps}
 
+    
+    
+    
     # inversion
     inversed, intermediates = batch_ddim_inversion(
         model, cond, latents, args.ddim_steps, args.ddim_eta, args.unconditional_guidance_scale, log_every_t=1, return_cross_attn=True, **kwargs
@@ -122,13 +134,13 @@ def run_inference(args, gpu_num, gpu_no, **kwargs):
     paths = []
     input_traj = []
 
-    #n_layers = len(cmaps[0])
+    n_layers = len(cmaps[0])
     for frame in tqdm(range(frames), desc="Building trajectory from cross-attention maps"):
         # Compute average cross-attention map for given frame and provided token index
         cmaps_l = []
-        for i in range(15):#range(args.ddim_steps):
+        for i in range(args.ddim_steps):
             cmaps_t = []
-            for j in [5, 6, 7, 8]:#range(n_layers):
+            for j in range(n_layers):
                 # select timestep
                 cmaps_curr = cmaps[i]
                 # select layer
@@ -137,7 +149,7 @@ def run_inference(args, gpu_num, gpu_no, **kwargs):
                 cmap = cmap[..., ind_ref+1]
                 # reshape to [C, F, H, W]
                 sz = int((cmap.shape[-1] / (inversed.shape[-1] / inversed.shape[-2])) ** (1/2))
-                cmap = cmap.reshape(-1, frames, sz, int(sz * 1.6))
+                cmap = cmap.reshape(-1, frames, sz, int(sz * width / height))
                 # average over C
                 cmap = cmap.mean(dim=0)[frame].unsqueeze(0)
                 
@@ -149,24 +161,53 @@ def run_inference(args, gpu_num, gpu_no, **kwargs):
             cmap = torch.stack(cmaps_t).mean(0)
             cmaps_l.append(cmap)
         cmap = torch.stack(cmaps_l).mean(0)
+        cmap = cmap.squeeze(0)
+        
+        # # gaussian smoothing
+        # cmap = gaussian_filter(cmap, args.sigma)
 
-        # binarize
-        thresh = np.quantile(cmap.numpy(), args.quantile)
-        cmap = cmap.numpy() > thresh
+        # # binarize
+        # cmap = cmap.numpy()
+        # thresh = np.quantile(cmap, args.quantile)
+        # cmap = (cmap > thresh).astype(np.uint8)
 
-        # remove noise with binary morphology (opening)
-        #kernel = np.ones((args.kernel_size, args.kernel_size), np.uint8)
-        #cmap = cv2.morphologyEx(cmap.astype(np.uint8), cv2.MORPH_OPEN, kernel)
+        # # remove noise with binary morphology (opening)
+        # kernel = np.ones((args.kernel_size, args.kernel_size), np.uint8)
+        # cmap = cv2.morphologyEx(cmap.astype(np.uint8), cv2.MORPH_OPEN, kernel)
 
+        # # compute bbox
+        # x,y,w,h = cv2.boundingRect(cv2.findNonZero(cmap))
+        # # x,y,w,h -> h_start,h_end,w_start,w_end
+        # h_start = y
+        # h_end = y + h
+        # w_start = x
+        # w_end = x + w
+        # # get relative coords
+        # hh, ww = cmap.shape
+        # h_start /= hh
+        # h_end /= hh
+        # w_start /= ww
+        # w_end /= ww
+        
+        # center of mass
+        cmap = cmap.numpy()
+        total_mass = np.sum(cmap)
+        rows, cols = cmap.shape
+        y_coords, x_coords = np.indices((rows, cols))
+        weighted_sum_x = np.sum(x_coords * cmap)
+        weighted_sum_y = np.sum(y_coords * cmap)
+        center_of_mass_x = weighted_sum_x / total_mass
+        center_of_mass_y = weighted_sum_y / total_mass 
+        
         # compute bbox
-        x,y,w,h = cv2.boundingRect(cv2.findNonZero(cmap.astype(np.uint8)[0]))
-        # x,y,w,h -> h_start,h_end,w_start,w_end
-        h_start = y
-        h_end = y + h
-        w_start = x
-        w_end = x + w
+        hh, ww = cmap.shape
+        bbox_w_half = ww * args.size_frac / 2
+        bbox_h_half = hh * args.size_frac / 2
+        h_start = center_of_mass_y - bbox_h_half
+        h_end = center_of_mass_y + bbox_h_half
+        w_start = center_of_mass_x - bbox_w_half
+        w_end = center_of_mass_x + bbox_w_half
         # get relative coords
-        hh, ww = cmap[0].shape
         h_start /= hh
         h_end /= hh
         w_start /= ww
@@ -175,12 +216,15 @@ def run_inference(args, gpu_num, gpu_no, **kwargs):
         # add to paths
         paths.append([h_start, h_end, w_start, w_end])
 
-        if frame in [0, 6, 15]:
+        if frame in [0, 5, 10, 15]:
             input_traj.append([frame, h_start, h_end, w_start, w_end])
 
     del inversed
     del intermediates
     torch.cuda.empty_cache()
+    
+    
+    
 
     # ----- FreeTraj starts here
 
@@ -238,7 +282,7 @@ def run_inference(args, gpu_num, gpu_no, **kwargs):
         batch_size = idx_e - idx_s
         filenames = filename_list_rank[idx_s:idx_e]
         noise_shape = [batch_size, channels, frames, h, w]
-        fps = torch.tensor([args.fps]*batch_size).to(model.device).long()
+        fps = torch.tensor([fps_n]*batch_size).to(model.device).long()
 
         idx_list = idx_list_rank[idx_s:idx_e][0]
         # print(idx_list)
@@ -252,12 +296,12 @@ def run_inference(args, gpu_num, gpu_no, **kwargs):
         cond = {"c_crossattn": [text_emb], "fps": fps}
         
         ## inference
-        batch_samples = batch_ddim_sampling_freetraj(model, cond, noise_shape, args.n_samples, \
-                                                args.ddim_steps, args.ddim_eta, args.unconditional_guidance_scale, idx_list=idx_list, input_traj=input_traj, args=args, **kwargs)
-        #batch_samples = batch_ddim_sampling_freetraj_with_path(model, cond, noise_shape, args.n_samples, \
-        #                                        args.ddim_steps, args.ddim_eta, args.unconditional_guidance_scale, idx_list=idx_list, paths=paths, args=args, **kwargs)
+        #batch_samples = batch_ddim_sampling_freetraj(model, cond, noise_shape, args.n_samples, \
+        #                                        args.ddim_steps, args.ddim_eta, args.unconditional_guidance_scale, idx_list=idx_list, input_traj=input_traj, args=args, **kwargs)
+        batch_samples = batch_ddim_sampling_freetraj_with_path(model, cond, noise_shape, args.n_samples, \
+                                                args.ddim_steps, args.ddim_eta, args.unconditional_guidance_scale, idx_list=idx_list, paths=paths, args=args, **kwargs)
         ## b,samples,c,t,h,w
-        # save_videos(batch_samples, args.savedir, filenames, fps=args.savefps)
+        #save_videos(batch_samples, args.savedir, filenames, fps=args.savefps)
         paths_ = plan_path(input_traj)
         save_videos_with_bbox_and_ref(video, batch_samples, args.savedir, bboxdir, refdir, filenames, fps=args.savefps, paths=paths)
 

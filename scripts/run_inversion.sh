@@ -1,9 +1,8 @@
-name="inversion_test"
-
 ckpt='checkpoints/base_512_v2/model.ckpt'
 config='configs/inference_t2v_freetraj_512_v2.0.yaml'
 
-res_dir="results_inversion_layers_5678_interp"
+res_dir="results_center_of_mass"
+#ref_path="assets/reference_examples/car-turn.mp4"
 ref_path="assets/reference_examples/car-roundabout-24.mp4"
 prompt_ref_file="prompts/inversion/text_ref.txt"
 prompt_gen_file="prompts/inversion/text.txt"
@@ -15,9 +14,9 @@ python3 scripts/evaluation/inference_with_inversion.py \
 --seed 123 \
 --ckpt_path $ckpt \
 --config $config \
---savedir $res_dir/$name \
+--savedir $res_dir \
 --n_samples 1 \
---bs 1 --max_size 512 \
+--bs 1 --max_size 384 \
 --unconditional_guidance_scale 12.0 \
 --ddim_steps 50 \
 --ddim_eta 0.0 \
@@ -27,5 +26,6 @@ python3 scripts/evaluation/inference_with_inversion.py \
 --prompt_gen_file $prompt_gen_file \
 --idx_gen_file $idx_gen_file \
 --ddim_edit 6 \
---fps 10 \
---quantile 0.9
+--quantile 0.9 \
+--sigma 4 \
+--size_frac 0.3
