@@ -12,6 +12,8 @@ from lvdm.models.samplers.ddim import DDIMSampler
 from lvdm.models.samplers.ddim_freetraj import DDIMSampler as DDIMFreeTrajSampler
 
 from utils.utils_freetraj import get_freq_filter, freq_mix_3d, get_path, plan_path
+from torchvision.transforms.functional import resize
+
 
 def batch_ddim_sampling_freetraj(model, cond, noise_shape, n_samples=1, ddim_steps=50, ddim_eta=1.0,\
                         cfg_scale=1.0, temporal_cfg_scale=None, idx_list=[], input_traj=[], x_T_total=None, args=None, **kwargs):
@@ -325,6 +327,118 @@ def batch_ddim_sampling_freetraj_with_path(model, cond, noise_shape, n_samples=1
     ## batch, <samples>, c, t, h, w
     batch_variants = torch.stack(batch_variants, dim=1)
     return batch_variants
+
+def batch_ddim_sampling_freetraj_with_path_cmaps(model, cond, noise_shape, n_samples=1, ddim_steps=50, ddim_eta=1.0,\
+                        cfg_scale=1.0, temporal_cfg_scale=None, idx_list=[], paths=[], x_T_total=None, args=None, cmaps=[], **kwargs):
+    ddim_sampler = DDIMFreeTrajSampler(model)
+    uncond_type = model.uncond_type
+    batch_size, channels, frames, h, w = noise_shape
+
+    ## construct unconditional guidance
+    if cfg_scale != 1.0:
+        if uncond_type == "empty_seq":
+            prompts = batch_size * [""]
+            #prompts = N * T * [""]  ## if is_imgbatch=True
+            uc_emb = model.get_learned_conditioning(prompts)
+        elif uncond_type == "zero_embed":
+            c_emb = cond["c_crossattn"][0] if isinstance(cond, dict) else cond
+            uc_emb = torch.zeros_like(c_emb)
+                
+        ## process image embedding token
+        if hasattr(model, 'embedder'):
+            uc_img = torch.zeros(noise_shape[0],3,224,224).to(model.device)
+            ## img: b c h w >> b l c
+            uc_img = model.get_image_embeds(uc_img)
+            uc_emb = torch.cat([uc_emb, uc_img], dim=1)
+        
+        if isinstance(cond, dict):
+            uc = {key:cond[key] for key in cond.keys()}
+            uc.update({'c_crossattn': [uc_emb]})
+        else:
+            uc = uc_emb
+    else:
+        uc = None
+    
+    total_shape = [args.n_samples, 1, channels, frames, h, w]
+    print('total_shape', total_shape)
+
+    if x_T_total is None:
+        x_T_total = torch.randn(total_shape, device=model.device).repeat(1, batch_size, 1, 1, 1, 1)
+
+        noise_flow = True
+        if noise_flow:
+            print('noise_flow')
+            assert len(paths) == frames, f"Error: got wrong number of paths ({len(paths)}) for {frames} frames"
+            # paths: List([h_start, h_end, w_start, w_end], ...)
+
+
+            BOX_SIZE_H = min([he - hs for hs, he, ws, we in paths])
+            BOX_SIZE_W = min([we - ws for hs, he, ws, we in paths])
+            sub_h = int(BOX_SIZE_H * h) 
+            sub_w = int(BOX_SIZE_W * w)
+            x_T_sub = torch.randn([args.n_samples, 1, channels, sub_h, sub_w], device=model.device)
+            for i in range(frames):
+                h_start = int(paths[i][0] * h)
+                h_end = h_start + sub_h
+                w_start = int(paths[i][2] * w)
+                w_end = w_start + sub_w
+                cmap = cmaps[i]
+                cmap = resize(cmap, (h, w))
+                # no mix
+                x_T_total[:, :, :, i, h_start:h_end, w_start:w_end] = (1 - cmap[h_start:h_end, w_start:w_end]) * x_T_total[:, :, :, i, h_start:h_end, w_start:w_end] + cmap[h_start:h_end, w_start:w_end] * x_T_sub
+
+            filter_shape = [
+                1, 
+                channels, 
+                frames, 
+                h, 
+                w
+            ]
+
+            freq_filter = get_freq_filter(
+                filter_shape, 
+                device = model.device, 
+                filter_type='butterworth',
+                n=4,
+                d_s=0.25,
+                d_t=0.1
+            )
+
+            x_T_rand = torch.randn([1, 1, channels, frames, h, w], device=model.device)
+            x_T_total = freq_mix_3d(x_T_total.to(dtype=torch.float32), x_T_rand, LPF=freq_filter)
+
+        
+    # x_T = None
+    batch_variants = []
+    #batch_variants1, batch_variants2 = [], []
+    for _ in range(n_samples):
+        x_T = x_T_total[_]
+        if ddim_sampler is not None:
+            kwargs.update({"clean_cond": True})
+            samples, _ = ddim_sampler.sample(S=ddim_steps,
+                                            conditioning=cond,
+                                            batch_size=noise_shape[0],
+                                            shape=noise_shape[1:],
+                                            verbose=False,
+                                            unconditional_guidance_scale=cfg_scale,
+                                            unconditional_conditioning=uc,
+                                            eta=ddim_eta,
+                                            temporal_length=noise_shape[2],
+                                            conditional_guidance_scale_temporal=temporal_cfg_scale,
+                                            x_T=x_T,
+                                            idx_list=idx_list,
+                                            paths=paths,
+                                            ddim_edit = args.ddim_edit,
+                                            cmaps=cmaps,
+                                            **kwargs
+                                            )
+        ## reconstruct from latent to pixel space
+        batch_images = model.decode_first_stage_2DAE(samples)
+        batch_variants.append(batch_images)
+    ## batch, <samples>, c, t, h, w
+    batch_variants = torch.stack(batch_variants, dim=1)
+    return batch_variants
+
 
 def get_filelist(data_dir, ext='*'):
     file_list = glob.glob(os.path.join(data_dir, '*.%s'%ext))

@@ -135,6 +135,7 @@ def run_inference(args, gpu_num, gpu_no, **kwargs):
     input_traj = []
 
     n_layers = len(cmaps[0])
+    cmaps_frames = []
     for frame in tqdm(range(frames), desc="Building trajectory from cross-attention maps"):
         # Compute average cross-attention map for given frame and provided token index
         cmaps_l = []
@@ -163,55 +164,59 @@ def run_inference(args, gpu_num, gpu_no, **kwargs):
         cmap = torch.stack(cmaps_l).mean(0)
         cmap = cmap.squeeze(0)
         
-        # # gaussian smoothing
-        # cmap = gaussian_filter(cmap, args.sigma)
+        # gaussian smoothing
+        cmap = gaussian_filter(cmap, args.sigma)
 
-        # # binarize
-        # cmap = cmap.numpy()
-        # thresh = np.quantile(cmap, args.quantile)
-        # cmap = (cmap > thresh).astype(np.uint8)
+        # min max normalize
+        cmap_minmax = (cmap - cmap.min()) / (cmap.max() - cmap.min())
+        cmaps_frames.append(cmap_minmax)
+
+        # binarize
+        cmap = cmap.numpy()
+        thresh = np.quantile(cmap, args.quantile)
+        cmap = (cmap > thresh).astype(np.uint8)
 
         # # remove noise with binary morphology (opening)
         # kernel = np.ones((args.kernel_size, args.kernel_size), np.uint8)
         # cmap = cv2.morphologyEx(cmap.astype(np.uint8), cv2.MORPH_OPEN, kernel)
 
-        # # compute bbox
-        # x,y,w,h = cv2.boundingRect(cv2.findNonZero(cmap))
-        # # x,y,w,h -> h_start,h_end,w_start,w_end
-        # h_start = y
-        # h_end = y + h
-        # w_start = x
-        # w_end = x + w
-        # # get relative coords
-        # hh, ww = cmap.shape
-        # h_start /= hh
-        # h_end /= hh
-        # w_start /= ww
-        # w_end /= ww
-        
-        # center of mass
-        cmap = cmap.numpy()
-        total_mass = np.sum(cmap)
-        rows, cols = cmap.shape
-        y_coords, x_coords = np.indices((rows, cols))
-        weighted_sum_x = np.sum(x_coords * cmap)
-        weighted_sum_y = np.sum(y_coords * cmap)
-        center_of_mass_x = weighted_sum_x / total_mass
-        center_of_mass_y = weighted_sum_y / total_mass 
-        
         # compute bbox
-        hh, ww = cmap.shape
-        bbox_w_half = ww * args.size_frac / 2
-        bbox_h_half = hh * args.size_frac / 2
-        h_start = center_of_mass_y - bbox_h_half
-        h_end = center_of_mass_y + bbox_h_half
-        w_start = center_of_mass_x - bbox_w_half
-        w_end = center_of_mass_x + bbox_w_half
+        x,y,w,h = cv2.boundingRect(cv2.findNonZero(cmap))
+        # x,y,w,h -> h_start,h_end,w_start,w_end
+        h_start = y
+        h_end = y + h
+        w_start = x
+        w_end = x + w
         # get relative coords
+        hh, ww = cmap.shape
         h_start /= hh
         h_end /= hh
         w_start /= ww
         w_end /= ww
+        
+        # # center of mass
+        # cmap = cmap.numpy()
+        # total_mass = np.sum(cmap)
+        # rows, cols = cmap.shape
+        # y_coords, x_coords = np.indices((rows, cols))
+        # weighted_sum_x = np.sum(x_coords * cmap)
+        # weighted_sum_y = np.sum(y_coords * cmap)
+        # center_of_mass_x = weighted_sum_x / total_mass
+        # center_of_mass_y = weighted_sum_y / total_mass 
+        
+        # # compute bbox
+        # hh, ww = cmap.shape
+        # bbox_w_half = ww * args.size_frac / 2
+        # bbox_h_half = hh * args.size_frac / 2
+        # h_start = center_of_mass_y - bbox_h_half
+        # h_end = center_of_mass_y + bbox_h_half
+        # w_start = center_of_mass_x - bbox_w_half
+        # w_end = center_of_mass_x + bbox_w_half
+        # # get relative coords
+        # h_start /= hh
+        # h_end /= hh
+        # w_start /= ww
+        # w_end /= ww
 
         # add to paths
         paths.append([h_start, h_end, w_start, w_end])
@@ -299,7 +304,7 @@ def run_inference(args, gpu_num, gpu_no, **kwargs):
         #batch_samples = batch_ddim_sampling_freetraj(model, cond, noise_shape, args.n_samples, \
         #                                        args.ddim_steps, args.ddim_eta, args.unconditional_guidance_scale, idx_list=idx_list, input_traj=input_traj, args=args, **kwargs)
         batch_samples = batch_ddim_sampling_freetraj_with_path(model, cond, noise_shape, args.n_samples, \
-                                                args.ddim_steps, args.ddim_eta, args.unconditional_guidance_scale, idx_list=idx_list, paths=paths, args=args, **kwargs)
+                                                args.ddim_steps, args.ddim_eta, args.unconditional_guidance_scale, idx_list=idx_list, paths=paths, args=args, cmap=cmaps_frames, **kwargs)
         ## b,samples,c,t,h,w
         #save_videos(batch_samples, args.savedir, filenames, fps=args.savefps)
         paths_ = plan_path(input_traj)

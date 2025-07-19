@@ -2,6 +2,7 @@ from functools import partial
 import torch
 from torch import nn, einsum
 import torch.nn.functional as F
+from torchvision.transforms.functional import resize
 from einops import rearrange, repeat
 try:
     import xformers
@@ -104,7 +105,7 @@ class CrossAttention(nn.Module):
             if XFORMERS_IS_AVAILBLE and temporal_length is None:
                 self.forward = self.space_forward
 
-    def forward(self, x, context=None, mask=None, use_freetraj=False, idx_list=[], input_traj=[], return_cross_attn=False, use_freetraj_paths=False, paths=[]):
+    def forward(self, x, context=None, mask=None, use_freetraj=False, idx_list=[], input_traj=[], return_cross_attn=False, use_freetraj_paths=False, paths=[], cmaps=[]):
         h = self.heads
 
         q = self.to_q(x)
@@ -173,7 +174,9 @@ class CrossAttention(nn.Module):
                 w_fg_tensor1 = torch.zeros(w_len, device=sim.device)
                 w_fg_tensor1[w_fg1] = 1
                 fg_tensor1 = h_fg_tensor1.view(-1, 1) * w_fg_tensor1.view(1, -1)
+                # mask with 1-s at foreground
                 bg_tensor1 = 1 - fg_tensor1
+                # mask with 1-s at background
 
                 for j in range(sim.shape[4]):
                     if use_freetraj:
@@ -196,11 +199,18 @@ class CrossAttention(nn.Module):
                     fg_tensor2 = h_fg_tensor2.view(-1, 1) * w_fg_tensor2.view(1, -1)
                     bg_tensor2 = 1 - fg_tensor2
                     fg_tensor = fg_tensor1 * fg_tensor2
+                    # mask with 1-s at foreground
                     bg_tensor = bg_tensor1 * bg_tensor2
+                    # mask with 1-s at background
+
+                    cmap = cmaps[j]
+                    cmap = resize(cmap, (h_len, w_len))
+                    # cmap: 1, 40, 64
+                    # sim: [40, 64, 5, 16, 16], [20, 32, 10, 16, 16], [10, 16, 20, 16, 16], [5, 8, 20, 16, 16]
 
                     coef = 0.01
                     sim_mask[:, :, :, i, j] = coef * torch.ones_like(sim_mask[:, :, :, i, j])
-                    sim_mask[:, :, :, i, j] += (1 - coef) * torch.ones_like(sim_mask[:, :, :, i, j]) * (fg_tensor.view(h_len, w_len, 1) + bg_tensor.view(h_len, w_len, 1))
+                    sim_mask[:, :, :, i, j] += (1 - coef) * torch.ones_like(sim_mask[:, :, :, i, j]) * cmap * (fg_tensor.view(h_len, w_len, 1) + bg_tensor.view(h_len, w_len, 1))
 
             sim *= sim_mask
             sim = rearrange(sim, 'y x h i j -> (y x h) i j')
@@ -235,7 +245,7 @@ class CrossAttention(nn.Module):
 
         return self.to_out(out)
     
-    def space_forward(self, x, context=None, mask=None, use_freetraj=False, idx_list=[], input_traj=[], return_cross_attn=False, use_freetraj_paths=False, paths=[]):
+    def space_forward(self, x, context=None, mask=None, use_freetraj=False, idx_list=[], input_traj=[], return_cross_attn=False, use_freetraj_paths=False, paths=[], cmaps=[]):
         
         if context is None:
             SA_flag = True
@@ -318,9 +328,12 @@ class CrossAttention(nn.Module):
                     fg_tensor = h_fg_tensor.view(-1, 1) * w_fg_tensor.view(1, -1)
                     bg_tensor = 1 - fg_tensor
 
+                    cmap = cmaps[j]
+                    cmap = resize(cmap, (h_len, w_len))
+
                     coef = 0.01
                     sim_mask[i] = coef * torch.ones_like(sim_mask[i])
-                    sim_mask[i] += (1-coef) * (torch.ones_like(sim_mask[i]) * fg_tensor.view(1, h_len, w_len, 1, 1) * fg_tensor.view(1, 1, 1, h_len, w_len) + torch.ones_like(sim_mask[i]) * bg_tensor.view(1, h_len, w_len, 1, 1) * bg_tensor.view(1, 1, 1, h_len, w_len))
+                    sim_mask[i] += (1-coef) * (torch.ones_like(sim_mask[i]) * cmap * fg_tensor.view(1, h_len, w_len, 1, 1) * fg_tensor.view(1, 1, 1, h_len, w_len) + torch.ones_like(sim_mask[i]) * bg_tensor.view(1, h_len, w_len, 1, 1) * bg_tensor.view(1, 1, 1, h_len, w_len))
                 
                 sim *= sim_mask
                 sim = rearrange(sim, 't h y x y0 x0 -> (t h) (y x) (y0 x0)')    
@@ -358,9 +371,12 @@ class CrossAttention(nn.Module):
                     for j in p_fg:
                         p_bg.remove(j)
 
+                    cmap = cmaps[j]
+                    cmap = resize(cmap, (h_len, w_len))
+
                     weight_map[i, h_start:h_end, w_start:w_end] = weight * coef_a
                     sim_mask[i, :, :, :, p_bg] = torch.ones_like(sim_mask[i, :, :, :, p_bg]) * bg_tensor.view(1, h_len, w_len, 1)
-                    weight_add[i, :, :, :, p_fg] = torch.ones_like(sim_mask[i, :, :, :, p_fg]) * weight_map[i].view(1, h_len, w_len, 1)
+                    weight_add[i, :, :, :, p_fg] = torch.ones_like(sim_mask[i, :, :, :, p_fg]) * cmap * weight_map[i].view(1, h_len, w_len, 1)
 
                 max_neg_value = -torch.finfo(sim.dtype).max
                 sim.masked_fill_(~(sim_mask>0.5), max_neg_value)
@@ -422,7 +438,7 @@ class BasicTransformerBlock(nn.Module):
         self.norm3 = nn.LayerNorm(dim)
         self.checkpoint = checkpoint
 
-    def forward(self, x, context=None, mask=None, use_freetraj=False, idx_list=[], input_traj=[], return_cross_attn=False, use_freetraj_paths=False, paths=[], **kwargs):
+    def forward(self, x, context=None, mask=None, use_freetraj=False, idx_list=[], input_traj=[], return_cross_attn=False, use_freetraj_paths=False, paths=[], cmaps=[], **kwargs):
         ## implementation tricks: because checkpointing doesn't support non-tensor (e.g. None or scalar) arguments
         input_tuple = (x,)      ## should not be (x), otherwise *input_tuple will decouple x into multiple arguments
         if context is not None:
@@ -432,12 +448,12 @@ class BasicTransformerBlock(nn.Module):
             return checkpoint(forward_mask, (x,), self.parameters(), self.checkpoint)
         if context is not None and mask is not None:
             input_tuple = (x, context, mask)
-        input_tuple = (x, context, mask, use_freetraj, idx_list, input_traj,  return_cross_attn, use_freetraj_paths, paths)
+        input_tuple = (x, context, mask, use_freetraj, idx_list, input_traj,  return_cross_attn, use_freetraj_paths, paths, cmaps)
         return checkpoint(self._forward, input_tuple, self.parameters(), self.checkpoint)
 
-    def _forward(self, x, context=None, mask=None, use_freetraj=False, idx_list=[], input_traj=[], return_cross_attn=False, use_freetraj_paths=False, paths=[]):
-        x = self.attn1(self.norm1(x), context=context if self.disable_self_attn else None, mask=mask, use_freetraj=use_freetraj, idx_list=idx_list, input_traj=input_traj, return_cross_attn=False, use_freetraj_paths=use_freetraj_paths, paths=paths) + x
-        out = self.attn2(self.norm2(x), context=context, mask=mask, use_freetraj=use_freetraj, idx_list=idx_list, input_traj=input_traj, return_cross_attn=return_cross_attn, use_freetraj_paths=use_freetraj_paths, paths=paths)
+    def _forward(self, x, context=None, mask=None, use_freetraj=False, idx_list=[], input_traj=[], return_cross_attn=False, use_freetraj_paths=False, paths=[], cmaps=[]):
+        x = self.attn1(self.norm1(x), context=context if self.disable_self_attn else None, mask=mask, use_freetraj=use_freetraj, idx_list=idx_list, input_traj=input_traj, return_cross_attn=False, use_freetraj_paths=use_freetraj_paths, paths=paths, cmaps=cmaps) + x
+        out = self.attn2(self.norm2(x), context=context, mask=mask, use_freetraj=use_freetraj, idx_list=idx_list, input_traj=input_traj, return_cross_attn=return_cross_attn, use_freetraj_paths=use_freetraj_paths, paths=paths, cmaps=cmaps)
         if return_cross_attn:
             out, cmap = out
         x = out + x
