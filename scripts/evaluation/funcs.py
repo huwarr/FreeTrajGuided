@@ -383,7 +383,7 @@ def batch_ddim_sampling_freetraj_with_path_cmaps(model, cond, noise_shape, n_sam
                 w_start = int(paths[i][2] * w)
                 w_end = w_start + sub_w
                 cmap = cmaps[i]
-                cmap = resize(cmap, (h, w))
+                cmap = resize(cmap, (h, w)).to(device=model.device)
                 # no mix
                 x_T_total[:, :, :, i, h_start:h_end, w_start:w_end] = (1 - cmap[h_start:h_end, w_start:w_end]) * x_T_total[:, :, :, i, h_start:h_end, w_start:w_end] + cmap[h_start:h_end, w_start:w_end] * x_T_sub
 

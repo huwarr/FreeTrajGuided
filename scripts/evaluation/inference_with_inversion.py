@@ -12,7 +12,7 @@ import torch
 from pytorch_lightning import seed_everything
 
 from funcs import load_model_checkpoint, load_video_batch, load_prompts, load_idx, load_traj, load_image_batch, get_filelist, save_videos, save_videos_with_bbox, save_videos_with_bbox_and_ref
-from funcs import batch_ddim_inversion, batch_ddim_sampling_freetraj, batch_ddim_sampling_freetraj_with_path
+from funcs import batch_ddim_inversion, batch_ddim_sampling_freetraj, batch_ddim_sampling_freetraj_with_path, batch_ddim_sampling_freetraj_with_path_cmaps
 from utils.utils import instantiate_from_config
 from utils.utils_freetraj import plan_path
 
@@ -94,7 +94,7 @@ def run_inference(args, gpu_num, gpu_no, **kwargs):
     video = load_video_batch([args.ref_path], 1, video_size=(height, width), video_frames=frames).to(model.device)
     # B x C x F x H x W
     # [-1, 1]
-    write_video("test.mp4", ((video[0].permute(1, 2, 3, 0).cpu() + 1) / 2 * 255).to(dtype=torch.uint8), fps=args.savefps)
+    #write_video("test.mp4", ((video[0].permute(1, 2, 3, 0).cpu() + 1) / 2 * 255).to(dtype=torch.uint8), fps=args.savefps)
     #save_videos(video.unsqueeze(1), os.path.join(args.savedir, 'ref'), filenames, fps=args.savefps)
     
     # video -> latents
@@ -165,7 +165,7 @@ def run_inference(args, gpu_num, gpu_no, **kwargs):
         cmap = cmap.squeeze(0)
         
         # gaussian smoothing
-        cmap = gaussian_filter(cmap, args.sigma)
+        cmap = torch.from_numpy(gaussian_filter(cmap, args.sigma))
 
         # min max normalize
         cmap_minmax = (cmap - cmap.min()) / (cmap.max() - cmap.min())
@@ -229,6 +229,8 @@ def run_inference(args, gpu_num, gpu_no, **kwargs):
     torch.cuda.empty_cache()
     
     
+    print(len(cmaps_frames))
+    print(cmaps_frames[0].shape)
     
 
     # ----- FreeTraj starts here
@@ -303,11 +305,13 @@ def run_inference(args, gpu_num, gpu_no, **kwargs):
         ## inference
         #batch_samples = batch_ddim_sampling_freetraj(model, cond, noise_shape, args.n_samples, \
         #                                        args.ddim_steps, args.ddim_eta, args.unconditional_guidance_scale, idx_list=idx_list, input_traj=input_traj, args=args, **kwargs)
-        batch_samples = batch_ddim_sampling_freetraj_with_path(model, cond, noise_shape, args.n_samples, \
-                                                args.ddim_steps, args.ddim_eta, args.unconditional_guidance_scale, idx_list=idx_list, paths=paths, args=args, cmap=cmaps_frames, **kwargs)
+        #batch_samples = batch_ddim_sampling_freetraj_with_path(model, cond, noise_shape, args.n_samples, \
+        #                                        args.ddim_steps, args.ddim_eta, args.unconditional_guidance_scale, idx_list=idx_list, paths=paths, args=args, **kwargs)
+        batch_samples = batch_ddim_sampling_freetraj_with_path_cmaps(model, cond, noise_shape, args.n_samples, \
+                                                args.ddim_steps, args.ddim_eta, args.unconditional_guidance_scale, idx_list=idx_list, paths=paths, args=args, cmaps=cmaps_frames, **kwargs)
         ## b,samples,c,t,h,w
         #save_videos(batch_samples, args.savedir, filenames, fps=args.savefps)
-        paths_ = plan_path(input_traj)
+        #paths_ = plan_path(input_traj)
         save_videos_with_bbox_and_ref(video, batch_samples, args.savedir, bboxdir, refdir, filenames, fps=args.savefps, paths=paths)
 
     print(f"Saved in {args.savedir}. Time used: {(time.time() - start):.2f} seconds")

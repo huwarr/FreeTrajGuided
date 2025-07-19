@@ -204,13 +204,14 @@ class CrossAttention(nn.Module):
                     # mask with 1-s at background
 
                     cmap = cmaps[j]
-                    cmap = resize(cmap, (h_len, w_len))
+                    cmap = resize(cmap.view(1, 1, cmap.shape[0], cmap.shape[1]), (h_len, w_len)).to(device=sim.device)
+
                     # cmap: 1, 40, 64
                     # sim: [40, 64, 5, 16, 16], [20, 32, 10, 16, 16], [10, 16, 20, 16, 16], [5, 8, 20, 16, 16]
 
                     coef = 0.01
                     sim_mask[:, :, :, i, j] = coef * torch.ones_like(sim_mask[:, :, :, i, j])
-                    sim_mask[:, :, :, i, j] += (1 - coef) * torch.ones_like(sim_mask[:, :, :, i, j]) * cmap * (fg_tensor.view(h_len, w_len, 1) + bg_tensor.view(h_len, w_len, 1))
+                    sim_mask[:, :, :, i, j] += (1 - coef) * torch.ones_like(sim_mask[:, :, :, i, j]) * cmap.view(h_len, w_len, 1)# * (fg_tensor.view(h_len, w_len, 1) + bg_tensor.view(h_len, w_len, 1))
 
             sim *= sim_mask
             sim = rearrange(sim, 'y x h i j -> (y x h) i j')
@@ -328,12 +329,13 @@ class CrossAttention(nn.Module):
                     fg_tensor = h_fg_tensor.view(-1, 1) * w_fg_tensor.view(1, -1)
                     bg_tensor = 1 - fg_tensor
 
-                    cmap = cmaps[j]
-                    cmap = resize(cmap, (h_len, w_len))
+                    cmap = cmaps[i]
+                    cmap = resize(cmap.view(1, 1, cmap.shape[0], cmap.shape[1]), (h_len, w_len)).to(device=sim.device)
 
                     coef = 0.01
                     sim_mask[i] = coef * torch.ones_like(sim_mask[i])
-                    sim_mask[i] += (1-coef) * (torch.ones_like(sim_mask[i]) * cmap * fg_tensor.view(1, h_len, w_len, 1, 1) * fg_tensor.view(1, 1, 1, h_len, w_len) + torch.ones_like(sim_mask[i]) * bg_tensor.view(1, h_len, w_len, 1, 1) * bg_tensor.view(1, 1, 1, h_len, w_len))
+                    #sim_mask[i] += (1-coef) * (torch.ones_like(sim_mask[i]) * (cmap.view(1, h_len, w_len, 1, 1) * fg_tensor.view(1, h_len, w_len, 1, 1)) * (cmap.view(1, 1, 1, h_len, w_len) * fg_tensor.view(1, 1, 1, h_len, w_len)) + torch.ones_like(sim_mask[i]) * bg_tensor.view(1, h_len, w_len, 1, 1) * bg_tensor.view(1, 1, 1, h_len, w_len))
+                    sim_mask[i] += (1-coef) * (torch.ones_like(sim_mask[i]) * cmap.view(1, h_len, w_len, 1, 1) * cmap.view(1, 1, 1, h_len, w_len))# + torch.ones_like(sim_mask[i]) * bg_tensor.view(1, h_len, w_len, 1, 1) * bg_tensor.view(1, 1, 1, h_len, w_len))
                 
                 sim *= sim_mask
                 sim = rearrange(sim, 't h y x y0 x0 -> (t h) (y x) (y0 x0)')    
@@ -371,12 +373,12 @@ class CrossAttention(nn.Module):
                     for j in p_fg:
                         p_bg.remove(j)
 
-                    cmap = cmaps[j]
-                    cmap = resize(cmap, (h_len, w_len))
+                    cmap = cmaps[i]
+                    cmap = resize(cmap.view(1, 1, cmap.shape[0], cmap.shape[1]), (h_len, w_len)).to(device=sim.device)
 
                     weight_map[i, h_start:h_end, w_start:w_end] = weight * coef_a
                     sim_mask[i, :, :, :, p_bg] = torch.ones_like(sim_mask[i, :, :, :, p_bg]) * bg_tensor.view(1, h_len, w_len, 1)
-                    weight_add[i, :, :, :, p_fg] = torch.ones_like(sim_mask[i, :, :, :, p_fg]) * cmap * weight_map[i].view(1, h_len, w_len, 1)
+                    weight_add[i, :, :, :, p_fg] = torch.ones_like(sim_mask[i, :, :, :, p_fg]) * cmap.view(1, h_len, w_len, 1)# * weight_map[i].view(1, h_len, w_len, 1)
 
                 max_neg_value = -torch.finfo(sim.dtype).max
                 sim.masked_fill_(~(sim_mask>0.5), max_neg_value)
