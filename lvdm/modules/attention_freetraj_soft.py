@@ -105,7 +105,7 @@ class CrossAttention(nn.Module):
             if XFORMERS_IS_AVAILBLE and temporal_length is None:
                 self.forward = self.space_forward
 
-    def forward(self, x, context=None, mask=None, use_freetraj=False, idx_list=[], input_traj=[], return_cross_attn=False, use_freetraj_paths=False, paths=[], cmaps=[]):
+    def forward(self, x, context=None, mask=None, use_freetraj=False, idx_list=[], input_traj=[], return_cross_attn=False, return_self_attn=False, use_freetraj_paths=False, paths=[], cmaps=[], use_self_attn=False, self_attn_path=""):
         h = self.heads
 
         q = self.to_q(x)
@@ -211,7 +211,11 @@ class CrossAttention(nn.Module):
 
                     coef = 0.01
                     sim_mask[:, :, :, i, j] = coef * torch.ones_like(sim_mask[:, :, :, i, j])
-                    sim_mask[:, :, :, i, j] += (1 - coef) * torch.ones_like(sim_mask[:, :, :, i, j]) * cmap.view(h_len, w_len, 1)# * (fg_tensor.view(h_len, w_len, 1) + bg_tensor.view(h_len, w_len, 1))
+                    #sim_mask[:, :, :, i, j] += (1 - coef) * torch.ones_like(sim_mask[:, :, :, i, j]) * cmap.view(h_len, w_len, 1)# * (fg_tensor.view(h_len, w_len, 1) + bg_tensor.view(h_len, w_len, 1))
+                    
+                    sim_mask[:, :, :, i, j] += (1 - coef) * torch.ones_like(sim_mask[:, :, :, i, j]) * (fg_tensor.view(h_len, w_len, 1) + bg_tensor.view(h_len, w_len, 1))
+                    #sim_mask[:, :, :, i, j] += (1 - coef) * torch.ones_like(sim_mask[:, :, :, i, j]) * (cmap.view(h_len, w_len, 1) + bg_tensor.view(h_len, w_len, 1))
+                    #sim_mask[:, :, :, i, j] += (1 - coef) * torch.ones_like(sim_mask[:, :, :, i, j]) * (cmap.view(h_len, w_len, 1) + bg_tensor.view(h_len, w_len, 1))
 
             sim *= sim_mask
             sim = rearrange(sim, 'y x h i j -> (y x h) i j')
@@ -246,7 +250,8 @@ class CrossAttention(nn.Module):
 
         return self.to_out(out)
     
-    def space_forward(self, x, context=None, mask=None, use_freetraj=False, idx_list=[], input_traj=[], return_cross_attn=False, use_freetraj_paths=False, paths=[], cmaps=[]):
+    def space_forward(self, x, context=None, mask=None, use_freetraj=False, idx_list=[], input_traj=[], return_cross_attn=False, return_self_attn=False, use_freetraj_paths=False, paths=[], cmaps=[], use_self_attn=False, self_attn_path=""):
+        assert (not return_cross_attn and not return_self_attn) or (return_cross_attn or return_self_attn)
         
         if context is None:
             SA_flag = True
@@ -299,7 +304,15 @@ class CrossAttention(nn.Module):
             sim2 = einsum('b t d, t s d -> b t s', q, k2) * self.scale # TODO check 
             sim += sim2
         del k
+        
+        
+        
+        if SA_flag and use_self_attn:
+            use_freetraj = False
+            use_freetraj_paths = False
+            
 
+            
         if use_freetraj or use_freetraj_paths:
             coef_a = 0.25 / (BOX_SIZE_H * BOX_SIZE_W) / len(idx_list)
             weight = gaussian_weight(sub_h, sub_w).to(x.device)
@@ -335,7 +348,9 @@ class CrossAttention(nn.Module):
                     coef = 0.01
                     sim_mask[i] = coef * torch.ones_like(sim_mask[i])
                     #sim_mask[i] += (1-coef) * (torch.ones_like(sim_mask[i]) * (cmap.view(1, h_len, w_len, 1, 1) * fg_tensor.view(1, h_len, w_len, 1, 1)) * (cmap.view(1, 1, 1, h_len, w_len) * fg_tensor.view(1, 1, 1, h_len, w_len)) + torch.ones_like(sim_mask[i]) * bg_tensor.view(1, h_len, w_len, 1, 1) * bg_tensor.view(1, 1, 1, h_len, w_len))
-                    sim_mask[i] += (1-coef) * (torch.ones_like(sim_mask[i]) * cmap.view(1, h_len, w_len, 1, 1) * cmap.view(1, 1, 1, h_len, w_len))# + torch.ones_like(sim_mask[i]) * bg_tensor.view(1, h_len, w_len, 1, 1) * bg_tensor.view(1, 1, 1, h_len, w_len))
+                    #sim_mask[i] += (1-coef) * (torch.ones_like(sim_mask[i]) * cmap.view(1, h_len, w_len, 1, 1) * cmap.view(1, 1, 1, h_len, w_len))# + torch.ones_like(sim_mask[i]) * bg_tensor.view(1, h_len, w_len, 1, 1) * bg_tensor.view(1, 1, 1, h_len, w_len))
+                    sim_mask[i] += (1-coef) * (torch.ones_like(sim_mask[i]) * fg_tensor.view(1, h_len, w_len, 1, 1) *  fg_tensor.view(1, 1, 1, h_len, w_len) + torch.ones_like(sim_mask[i]) * bg_tensor.view(1, h_len, w_len, 1, 1) * bg_tensor.view(1, 1, 1, h_len, w_len))
+                    #sim_mask[i] += (1-coef) * (torch.ones_like(sim_mask[i]) * cmap.view(1, h_len, w_len, 1, 1) *  cmap.view(1, 1, 1, h_len, w_len) + torch.ones_like(sim_mask[i]) * bg_tensor.view(1, h_len, w_len, 1, 1) * bg_tensor.view(1, 1, 1, h_len, w_len))
                 
                 sim *= sim_mask
                 sim = rearrange(sim, 't h y x y0 x0 -> (t h) (y x) (y0 x0)')    
@@ -378,7 +393,8 @@ class CrossAttention(nn.Module):
 
                     weight_map[i, h_start:h_end, w_start:w_end] = weight * coef_a
                     sim_mask[i, :, :, :, p_bg] = torch.ones_like(sim_mask[i, :, :, :, p_bg]) * bg_tensor.view(1, h_len, w_len, 1)
-                    weight_add[i, :, :, :, p_fg] = torch.ones_like(sim_mask[i, :, :, :, p_fg]) * cmap.view(1, h_len, w_len, 1)# * weight_map[i].view(1, h_len, w_len, 1)
+                    #weight_add[i, :, :, :, p_fg] = torch.ones_like(sim_mask[i, :, :, :, p_fg]) * cmap.view(1, h_len, w_len, 1) * weight_map[i].view(1, h_len, w_len, 1)
+                    weight_add[i, :, :, :, p_fg] = torch.ones_like(sim_mask[i, :, :, :, p_fg]) * cmap.view(1, h_len, w_len, 1) * coef_a
 
                 max_neg_value = -torch.finfo(sim.dtype).max
                 sim.masked_fill_(~(sim_mask>0.5), max_neg_value)
@@ -395,7 +411,20 @@ class CrossAttention(nn.Module):
 
         # attention, what we cannot get enough of
         sim = sim.softmax(dim=-1)
+        
+        
+        
+        if use_self_attn:
+            #print('load sim')
+            sim = torch.load(self_attn_path)
+            sim = sim.to(device=x.device)
+            
+            
+        
+        
         if return_cross_attn:
+            cmap = sim
+        if return_self_attn:
             cmap = sim
         if use_freetraj:
             sim += weight_add
@@ -418,7 +447,7 @@ class CrossAttention(nn.Module):
             out = out + self.image_cross_attention_scale * out_ip
         del q
 
-        if return_cross_attn:
+        if return_cross_attn or return_self_attn:
             return self.to_out(out), cmap.detach().cpu()
         return self.to_out(out)
 
@@ -440,7 +469,7 @@ class BasicTransformerBlock(nn.Module):
         self.norm3 = nn.LayerNorm(dim)
         self.checkpoint = checkpoint
 
-    def forward(self, x, context=None, mask=None, use_freetraj=False, idx_list=[], input_traj=[], return_cross_attn=False, use_freetraj_paths=False, paths=[], cmaps=[], **kwargs):
+    def forward(self, x, context=None, mask=None, use_freetraj=False, idx_list=[], input_traj=[], return_cross_attn=False, return_self_attn=False, use_freetraj_paths=False, paths=[], cmaps=[], use_self_attn=False, self_attn_path="", **kwargs):
         ## implementation tricks: because checkpointing doesn't support non-tensor (e.g. None or scalar) arguments
         input_tuple = (x,)      ## should not be (x), otherwise *input_tuple will decouple x into multiple arguments
         if context is not None:
@@ -450,18 +479,28 @@ class BasicTransformerBlock(nn.Module):
             return checkpoint(forward_mask, (x,), self.parameters(), self.checkpoint)
         if context is not None and mask is not None:
             input_tuple = (x, context, mask)
-        input_tuple = (x, context, mask, use_freetraj, idx_list, input_traj,  return_cross_attn, use_freetraj_paths, paths, cmaps)
+        input_tuple = (x, context, mask, use_freetraj, idx_list, input_traj,  return_cross_attn, return_self_attn, use_freetraj_paths, paths, cmaps, use_self_attn, self_attn_path)
         return checkpoint(self._forward, input_tuple, self.parameters(), self.checkpoint)
 
-    def _forward(self, x, context=None, mask=None, use_freetraj=False, idx_list=[], input_traj=[], return_cross_attn=False, use_freetraj_paths=False, paths=[], cmaps=[]):
-        x = self.attn1(self.norm1(x), context=context if self.disable_self_attn else None, mask=mask, use_freetraj=use_freetraj, idx_list=idx_list, input_traj=input_traj, return_cross_attn=False, use_freetraj_paths=use_freetraj_paths, paths=paths, cmaps=cmaps) + x
-        out = self.attn2(self.norm2(x), context=context, mask=mask, use_freetraj=use_freetraj, idx_list=idx_list, input_traj=input_traj, return_cross_attn=return_cross_attn, use_freetraj_paths=use_freetraj_paths, paths=paths, cmaps=cmaps)
+    def _forward(self, x, context=None, mask=None, use_freetraj=False, idx_list=[], input_traj=[], return_cross_attn=False, return_self_attn=False, use_freetraj_paths=False, paths=[], cmaps=[], use_self_attn=False, self_attn_path=""):
+        out = self.attn1(self.norm1(x), context=context if self.disable_self_attn else None, mask=mask, use_freetraj=use_freetraj, idx_list=idx_list, input_traj=input_traj, return_cross_attn=False, return_self_attn=return_self_attn if not self.disable_self_attn else False, use_freetraj_paths=use_freetraj_paths, paths=paths, cmaps=cmaps, use_self_attn=use_self_attn if not self.disable_self_attn else False, self_attn_path=self_attn_path if not self.disable_self_attn else "")
+        if return_self_attn: 
+            if not self.disable_self_attn:
+                out, smap = out
+            else:
+                smap = None
+        x = out + x
+        out = self.attn2(self.norm2(x), context=context, mask=mask, use_freetraj=use_freetraj, idx_list=idx_list, input_traj=input_traj, return_cross_attn=return_cross_attn, return_self_attn=False, use_freetraj_paths=use_freetraj_paths, paths=paths, cmaps=cmaps)
         if return_cross_attn:
             out, cmap = out
         x = out + x
         x = self.ff(self.norm3(x)) + x
+        if return_cross_attn and return_self_attn:
+            return x, cmap, smap
         if return_cross_attn:
             return x, cmap
+        if return_self_attn:
+            return x, smap
         return x
 
 
@@ -504,7 +543,7 @@ class SpatialTransformer(nn.Module):
         self.use_linear = use_linear
 
 
-    def forward(self, x, context=None, return_cross_attn=False, **kwargs):
+    def forward(self, x, context=None, return_cross_attn=False, return_self_attn=False, **kwargs):
         b, c, h, w = x.shape
         x_in = x
         x = self.norm(x)
@@ -514,11 +553,19 @@ class SpatialTransformer(nn.Module):
         if self.use_linear:
             x = self.proj_in(x)
         cmaps_l = []
+        smaps_l = []
         for i, block in enumerate(self.transformer_blocks):
-            out = block(x, context=context, return_cross_attn=return_cross_attn, **kwargs)
-            if return_cross_attn:
+            out = block(x, context=context, return_cross_attn=return_cross_attn, return_self_attn=return_self_attn, **kwargs)
+            if return_cross_attn and return_self_attn:
+                x, cmaps, smaps = out
+                cmaps_l.append(cmaps)
+                smaps_l.append(smaps)
+            elif return_cross_attn:
                 x, cmaps = out
                 cmaps_l.append(cmaps)
+            elif return_self_attn:
+                x, smaps = out
+                smaps_l.append(smaps)
             else:
                 x = out
         if self.use_linear:
@@ -526,10 +573,13 @@ class SpatialTransformer(nn.Module):
         x = rearrange(x, 'b (h w) c -> b c h w', h=h, w=w).contiguous()
         if not self.use_linear:
             x = self.proj_out(x)
+        if return_cross_attn and return_self_attn:
+            return x + x_in, cmaps_l, smaps_l
         if return_cross_attn:
             return x + x_in, cmaps_l
-        else:
-            return x + x_in
+        if return_self_attn:
+            return x + x_in, smaps_l
+        return x + x_in
     
     
 class TemporalTransformer(nn.Module):
@@ -603,7 +653,7 @@ class TemporalTransformer(nn.Module):
         if self.only_self_att:
             ## note: if no context is given, cross-attention defaults to self-attention
             for i, block in enumerate(self.transformer_blocks):
-                x = block(x, mask=mask, return_cross_attn=False, **kwargs)
+                x = block(x, mask=mask, return_cross_attn=False, return_self_attn=False, **kwargs)
             x = rearrange(x, '(b hw) t c -> b hw t c', b=b).contiguous()
         else:
             x = rearrange(x, '(b hw) t c -> b hw t c', b=b).contiguous()
@@ -615,7 +665,7 @@ class TemporalTransformer(nn.Module):
                         context[j],
                         't l con -> (t r) l con', r=(h * w) // t, t=t).contiguous()
                     ## note: causal mask will not applied in cross-attention case
-                    x[j] = block(x[j], context=context_j, return_cross_attn=False, **kwargs)
+                    x[j] = block(x[j], context=context_j, return_cross_attn=False, return_self_attn=False, **kwargs)
         
         if self.use_linear:
             x = self.proj_out(x)

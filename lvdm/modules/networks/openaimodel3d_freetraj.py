@@ -1,3 +1,4 @@
+import os
 from functools import partial
 from abc import abstractmethod
 import torch
@@ -34,25 +35,37 @@ class TimestepEmbedSequential(nn.Sequential, TimestepBlock):
     support it as an extra input.
     """
 
-    def forward(self, x, emb, context=None, batch_size=None, use_freetraj=False, use_freetraj_paths=False, return_cross_attn=False, **kwargs):
+    def forward(self, x, emb, context=None, batch_size=None, use_freetraj=False, use_freetraj_paths=False, return_cross_attn=False, return_self_attn=False, **kwargs):
         cmaps = []
+        smaps = []
         #print(return_cross_attn)
         for layer in self:
             if isinstance(layer, TimestepBlock):
                 x = layer(x, emb, batch_size)
             elif isinstance(layer, SpatialTransformer):
-                x = layer(x, context, use_freetraj=use_freetraj, use_freetraj_paths=use_freetraj_paths, return_cross_attn=return_cross_attn, **kwargs)
-                if return_cross_attn and isinstance(x, tuple):
+                x = layer(x, context, use_freetraj=use_freetraj, use_freetraj_paths=use_freetraj_paths, return_cross_attn=return_cross_attn, return_self_attn=return_self_attn, **kwargs)
+                if return_cross_attn and return_self_attn and isinstance(x, tuple):
+                    x, cmaps_curr, smaps_curr = x
+                    cmaps.append(cmaps_curr)
+                    smaps.append(smaps_curr)
+                elif return_cross_attn and isinstance(x, tuple):
                     x, cmaps_curr = x
                     cmaps.append(cmaps_curr)
+                elif return_self_attn and isinstance(x, tuple):
+                    x, smaps_curr = x
+                    smaps.append(smaps_curr)
             elif isinstance(layer, TemporalTransformer):
                 x = rearrange(x, '(b f) c h w -> b c f h w', b=batch_size)
                 x = layer(x, context, use_freetraj=use_freetraj, use_freetraj_paths=use_freetraj_paths, **kwargs)
                 x = rearrange(x, 'b c f h w -> (b f) c h w')
             else:
                 x = layer(x,)
+        if return_cross_attn and return_self_attn:
+            return x, cmaps, smaps
         if return_cross_attn:
             return x, cmaps
+        if return_self_attn:
+            return x, smaps
         return x
 
 
@@ -539,7 +552,7 @@ class UNetModel(nn.Module):
             zero_module(conv_nd(dims, model_channels, out_channels, 3, padding=1)),
         )
 
-    def forward(self, x, timesteps, context=None, features_adapter=None, fps=16, return_cross_attn=False, **kwargs):
+    def forward(self, x, timesteps, context=None, features_adapter=None, fps=16, return_cross_attn=False, return_self_attn=False, use_self_attn=False, **kwargs):
         t_emb = timestep_embedding(timesteps, self.model_channels, repeat_only=False)
         emb = self.time_embed(t_emb)
 
@@ -562,9 +575,12 @@ class UNetModel(nn.Module):
         adapter_idx = 0
         hs = []
         cmaps = []
+        smaps = []
+        layer_n = 0
         #print(return_cross_attn)
         for id, module in enumerate(self.input_blocks):
-            h = module(h, emb, context=context, batch_size=b, return_cross_attn=return_cross_attn, **kwargs)
+            h = module(h, emb, context=context, batch_size=b, return_cross_attn=return_cross_attn, return_self_attn=False, **kwargs)
+            layer_n += 1
             if return_cross_attn and isinstance(h, tuple):
                 h, cmaps_cur = h
                 cmaps.append(cmaps_cur)
@@ -578,24 +594,65 @@ class UNetModel(nn.Module):
         if features_adapter is not None:
             assert len(features_adapter)==adapter_idx, 'Wrong features_adapter'
 
-        h = self.middle_block(h, emb, context=context, batch_size=b, return_cross_attn=False, **kwargs)
-
+        h = self.middle_block(h, emb, context=context, batch_size=b, return_cross_attn=False, return_self_attn=False, **kwargs)
+        layer_n += 1
         #print(h.shape)
         #for _ in hs:
             #print(_.shape)
+        
         for module in self.output_blocks:
+            layer_n += 1
+                
+            #if layer_n not in [20, 21, 22]:
+            #    use_self_attn_ = False
+            #    return_self_attn_ = False
+            #else:
+            use_self_attn_ = use_self_attn
+            return_self_attn_ = return_self_attn
+            
+            #if use_self_attn_:
+                #print("true 1")
+    
+            self_attn_path = ""
+            if use_self_attn:
+                step = timesteps[0].item()
+                self_attn_path = f'/notebooks/smaps/step{step}_layer{layer_n}.pt'
+                if not os.path.exists(self_attn_path):
+                    use_self_attn_ = False
+            #if use_self_attn_:    
+                #print("true 2")
+                
             h = torch.cat([h, hs.pop()], dim=1)
-            h = module(h, emb, context=context, batch_size=b, return_cross_attn=return_cross_attn, **kwargs)
-            if return_cross_attn and isinstance(h, tuple):
+            h = module(h, emb, context=context, batch_size=b, return_cross_attn=return_cross_attn, return_self_attn=return_self_attn_, use_self_attn=use_self_attn_, self_attn_path=self_attn_path, **kwargs)
+            if return_cross_attn and return_self_attn_ and isinstance(h, tuple):
+                h, cmaps_cur, smaps_cur = h
+                cmaps.append(cmaps_cur)
+                #smaps.append(smaps_cur)
+                step = timesteps[0].item()
+                path = f'/notebooks/smaps/step{step}_layer{layer_n}.pt'
+                if len(smaps_cur) > 0:
+                    torch.save(smaps_cur[0][0], path)
+            elif return_cross_attn and isinstance(h, tuple):
                 h, cmaps_cur = h
                 cmaps.append(cmaps_cur)
+            elif return_self_attn_ and isinstance(h, tuple):
+                h, smaps_cur = h
+                #smaps.append(smaps_cur)
+                step = timesteps[0].item()
+                path = f'/notebooks/smaps/step{step}_layer{layer_n}.pt'
+                #print(len(smaps_cur))
+                if len(smaps_cur) > 0:
+                    torch.save(smaps_cur[0][0], path)
         h = h.type(x.dtype)
         y = self.out(h)
         
         # reshape back to (b c t h w)
         y = rearrange(y, '(b t) c h w -> b c t h w', b=b)
+        if return_cross_attn and return_self_attn:
+            return y, cmaps, smaps
         if return_cross_attn:
             return y, cmaps
-        else:
-            return y
+        if return_self_attn:
+            return y, smaps
+        return y
     

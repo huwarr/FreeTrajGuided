@@ -1,4 +1,4 @@
-import argparse, os, sys, glob, yaml, math, random
+import argparse, os, sys, glob, yaml, math, random, shutil
 import cv2
 import datetime, time
 import numpy as np
@@ -12,7 +12,7 @@ import torch
 from pytorch_lightning import seed_everything
 
 from funcs import load_model_checkpoint, load_video_batch, load_prompts, load_idx, load_traj, load_image_batch, get_filelist, save_videos, save_videos_with_bbox, save_videos_with_bbox_and_ref
-from funcs import batch_ddim_inversion, batch_ddim_sampling_freetraj, batch_ddim_sampling_freetraj_with_path, batch_ddim_sampling_freetraj_with_path_cmaps
+from funcs import batch_ddim_inversion, batch_ddim_sampling_freetraj, batch_ddim_sampling_freetraj_with_path, batch_ddim_sampling_freetraj_with_path_cmaps, batch_ddim_sampling_freetraj_with_path_cmaps_selfattn, batch_ddim_sampling_freetraj_with_cmaps_selfattn
 from utils.utils import instantiate_from_config
 from utils.utils_freetraj import plan_path
 
@@ -111,11 +111,15 @@ def run_inference(args, gpu_num, gpu_no, **kwargs):
     cond = {"c_crossattn": [text_ref_emb], "fps": fps}
 
     
+    if os.path.exists('/notebooks/smaps'):
+        shutil.rmtree('/notebooks/smaps')
+    os.makedirs('/notebooks/smaps')
+    
     
     
     # inversion
     inversed, intermediates = batch_ddim_inversion(
-        model, cond, latents, args.ddim_steps, args.ddim_eta, args.unconditional_guidance_scale, log_every_t=1, return_cross_attn=True, **kwargs
+        model, cond, latents, args.ddim_steps, args.ddim_eta, args.unconditional_guidance_scale, log_every_t=1, return_cross_attn=True, return_self_attn=True, **kwargs
     )
     # filter cross attention maps
     cmaps = []
@@ -307,12 +311,22 @@ def run_inference(args, gpu_num, gpu_no, **kwargs):
         #                                        args.ddim_steps, args.ddim_eta, args.unconditional_guidance_scale, idx_list=idx_list, input_traj=input_traj, args=args, **kwargs)
         #batch_samples = batch_ddim_sampling_freetraj_with_path(model, cond, noise_shape, args.n_samples, \
         #                                        args.ddim_steps, args.ddim_eta, args.unconditional_guidance_scale, idx_list=idx_list, paths=paths, args=args, **kwargs)
-        batch_samples = batch_ddim_sampling_freetraj_with_path_cmaps(model, cond, noise_shape, args.n_samples, \
+        #batch_samples = batch_ddim_sampling_freetraj_with_path_cmaps(model, cond, noise_shape, args.n_samples, \
+        #                                        args.ddim_steps, args.ddim_eta, args.unconditional_guidance_scale, idx_list=idx_list, paths=paths, args=args, cmaps=cmaps_frames, **kwargs)
+        
+        
+        batch_samples = batch_ddim_sampling_freetraj_with_path_cmaps_selfattn(model, cond, noise_shape, args.n_samples, \
                                                 args.ddim_steps, args.ddim_eta, args.unconditional_guidance_scale, idx_list=idx_list, paths=paths, args=args, cmaps=cmaps_frames, **kwargs)
+        #batch_samples = batch_ddim_sampling_freetraj_with_cmaps_selfattn(model, cond, noise_shape, args.n_samples, \
+        #                                        args.ddim_steps, args.ddim_eta, args.unconditional_guidance_scale, idx_list=idx_list, input_traj=input_traj, args=args, cmaps=cmaps_frames, **kwargs)
+        
+        
         ## b,samples,c,t,h,w
         #save_videos(batch_samples, args.savedir, filenames, fps=args.savefps)
         #paths_ = plan_path(input_traj)
         save_videos_with_bbox_and_ref(video, batch_samples, args.savedir, bboxdir, refdir, filenames, fps=args.savefps, paths=paths)
+        
+    shutil.rmtree('/notebooks/smaps')
 
     print(f"Saved in {args.savedir}. Time used: {(time.time() - start):.2f} seconds")
     

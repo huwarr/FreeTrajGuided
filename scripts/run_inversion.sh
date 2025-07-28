@@ -1,7 +1,7 @@
 ckpt='checkpoints/base_512_v2/model.ckpt'
 config='configs/inference_t2v_freetraj_512_v2.0.yaml'
 
-res_dir="results_soft_injection_no_hard_masking"
+res_dir="results_soft_injection_weight_proper_mask_no_init_selfattn"
 #ref_path="assets/reference_examples/car-turn.mp4"
 ref_path="assets/reference_examples/car-roundabout-24.mp4"
 prompt_ref_file="prompts/inversion/text_ref.txt"
