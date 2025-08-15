@@ -1,3 +1,10 @@
 A car turning along the road.
 A cyclist turning along the road.
 A deer turning along the road.
+A truck turning along the highway.
+A boat drifting along the river.
+A train moving along the tracks.
+A dog running along the fence.
+A skateboarder gliding along the pavement.
+A skier sliding along the slope.
+A plane taxiing along the runway.

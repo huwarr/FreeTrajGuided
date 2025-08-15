@@ -483,22 +483,26 @@ def batch_ddim_sampling_freetraj_with_path_cmaps_selfattn(model, cond, noise_sha
             assert len(paths) == frames, f"Error: got wrong number of paths ({len(paths)}) for {frames} frames"
             # paths: List([h_start, h_end, w_start, w_end], ...)
 
+            
 
-            #BOX_SIZE_H = min([he - hs for hs, he, ws, we in paths])
-            #BOX_SIZE_W = min([we - ws for hs, he, ws, we in paths])
-            #sub_h = int(BOX_SIZE_H * h) 
-            #sub_w = int(BOX_SIZE_W * w)
-            #x_T_sub = torch.randn([args.n_samples, 1, channels, sub_h, sub_w], device=model.device)
-            #for i in range(frames):
-            #    h_start = int(paths[i][0] * h)
-            #    h_end = h_start + sub_h
-            #    w_start = int(paths[i][2] * w)
-            #    w_end = w_start + sub_w
-            #    cmap = cmaps[i]
-            #    cmap = resize(cmap, (h, w)).to(device=model.device)
-            #    # no mix
-            #    x_T_total[:, :, :, i, h_start:h_end, w_start:w_end] = (1 - cmap[h_start:h_end, w_start:w_end]) * x_T_total[:, :, :, i, h_start:h_end, w_start:w_end] + cmap[h_start:h_end, w_start:w_end] * x_T_sub
+            BOX_SIZE_H = min([he - hs for hs, he, ws, we in paths])
+            BOX_SIZE_W = min([we - ws for hs, he, ws, we in paths])
+            sub_h = int(BOX_SIZE_H * h) 
+            sub_w = int(BOX_SIZE_W * w)
+            x_T_sub = torch.randn([args.n_samples, 1, channels, sub_h, sub_w], device=model.device)
+            for i in range(frames):
+                h_start = int(paths[i][0] * h)
+                h_end = h_start + sub_h
+                w_start = int(paths[i][2] * w)
+                w_end = w_start + sub_w
+                cmap = cmaps[i]
+                cmap = resize(cmap, (h, w)).to(device=model.device)
+                # no mix
+                x_T_total[:, :, :, i, h_start:h_end, w_start:w_end] = (1 - cmap[h_start:h_end, w_start:w_end]) * x_T_total[:, :, :, i, h_start:h_end, w_start:w_end] + cmap[h_start:h_end, w_start:w_end] * x_T_sub
 
+                
+                
+                
             filter_shape = [
                 1, 
                 channels, 

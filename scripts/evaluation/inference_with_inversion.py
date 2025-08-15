@@ -115,6 +115,9 @@ def run_inference(args, gpu_num, gpu_no, **kwargs):
         shutil.rmtree('/notebooks/smaps')
     os.makedirs('/notebooks/smaps')
     
+    if os.path.exists('/notebooks/features'):
+        shutil.rmtree('/notebooks/features')
+    os.makedirs('/notebooks/features')
     
     
     # inversion
@@ -327,6 +330,7 @@ def run_inference(args, gpu_num, gpu_no, **kwargs):
         save_videos_with_bbox_and_ref(video, batch_samples, args.savedir, bboxdir, refdir, filenames, fps=args.savefps, paths=paths)
         
     shutil.rmtree('/notebooks/smaps')
+    shutil.rmtree('/notebooks/features')
 
     print(f"Saved in {args.savedir}. Time used: {(time.time() - start):.2f} seconds")
     

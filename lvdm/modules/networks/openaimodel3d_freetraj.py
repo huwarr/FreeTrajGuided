@@ -1,4 +1,5 @@
 import os
+import copy
 from functools import partial
 from abc import abstractmethod
 import torch
@@ -35,15 +36,31 @@ class TimestepEmbedSequential(nn.Sequential, TimestepBlock):
     support it as an extra input.
     """
 
-    def forward(self, x, emb, context=None, batch_size=None, use_freetraj=False, use_freetraj_paths=False, return_cross_attn=False, return_self_attn=False, **kwargs):
+    def forward(self, x, emb, context=None, batch_size=None, use_freetraj=False, use_freetraj_paths=False, return_cross_attn=False, return_self_attn=False, use_self_attn=False, timesteps=None, layer_n=0, **kwargs):
         cmaps = []
         smaps = []
         #print(return_cross_attn)
         for layer in self:
-            if isinstance(layer, TimestepBlock):
+            if isinstance(layer, ResBlock):
+                x = layer(x, emb, batch_size)
+                
+                #print(return_self_attn, layer_n)
+                if return_self_attn and layer_n == 20:
+                    features = copy.copy(x)
+                    features = features.cpu()
+                    step = timesteps[0].item()
+                    path = f'/notebooks/features/step{step}_layer{layer_n}.pt'
+                    torch.save(features, path)
+                if use_self_attn and layer_n == 20:
+                    step = timesteps[0].item()
+                    path = f'/notebooks/features/step{step}_layer{layer_n}.pt'
+                    features = torch.load(path)
+                    x = features.to(device=x.device)
+                
+            elif isinstance(layer, TimestepBlock):
                 x = layer(x, emb, batch_size)
             elif isinstance(layer, SpatialTransformer):
-                x = layer(x, context, use_freetraj=use_freetraj, use_freetraj_paths=use_freetraj_paths, return_cross_attn=return_cross_attn, return_self_attn=return_self_attn, **kwargs)
+                x = layer(x, context, use_freetraj=use_freetraj, use_freetraj_paths=use_freetraj_paths, return_cross_attn=return_cross_attn, return_self_attn=return_self_attn, use_self_attn=use_self_attn, **kwargs)
                 if return_cross_attn and return_self_attn and isinstance(x, tuple):
                     x, cmaps_curr, smaps_curr = x
                     cmaps.append(cmaps_curr)
@@ -603,27 +620,25 @@ class UNetModel(nn.Module):
         for module in self.output_blocks:
             layer_n += 1
                 
-            #if layer_n not in [20, 21, 22]:
+            #if layer_n not in [23, 24, 25]:
             #    use_self_attn_ = False
             #    return_self_attn_ = False
             #else:
             use_self_attn_ = use_self_attn
             return_self_attn_ = return_self_attn
             
-            #if use_self_attn_:
-                #print("true 1")
     
             self_attn_path = ""
-            if use_self_attn:
+            if use_self_attn_:
                 step = timesteps[0].item()
                 self_attn_path = f'/notebooks/smaps/step{step}_layer{layer_n}.pt'
                 if not os.path.exists(self_attn_path):
                     use_self_attn_ = False
-            #if use_self_attn_:    
-                #print("true 2")
+            
                 
             h = torch.cat([h, hs.pop()], dim=1)
-            h = module(h, emb, context=context, batch_size=b, return_cross_attn=return_cross_attn, return_self_attn=return_self_attn_, use_self_attn=use_self_attn_, self_attn_path=self_attn_path, **kwargs)
+            h = module(h, emb, context=context, batch_size=b, return_cross_attn=return_cross_attn, return_self_attn=return_self_attn_, use_self_attn=use_self_attn_, self_attn_path=self_attn_path, timesteps=timesteps, layer_n=layer_n, **kwargs)
+
             if return_cross_attn and return_self_attn_ and isinstance(h, tuple):
                 h, cmaps_cur, smaps_cur = h
                 cmaps.append(cmaps_cur)
